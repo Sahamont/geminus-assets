@@ -51,7 +51,15 @@
   .label .q svg{width:100%;height:100%}
   .label div.n{font-weight:600;font-size:13px;margin-top:4px;word-break:break-word}
   .hide{display:none!important}
+  .sticker-only{display:none}
+  .sticker{width:var(--sw,1.5in);text-align:center;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;color:#000;background:#fff}
+  .sticker svg{width:100%;height:auto;display:block}
+  .sticker .sn{font-weight:700;font-size:calc(var(--sw,1.5in)*0.09);line-height:1.1;margin-top:2px;word-break:break-word}
+  .sticker .sl{font-size:calc(var(--sw,1.5in)*0.07);line-height:1.1}
+  @page{margin:0.15in}
   @media print{
+    body.print-sticker main>*:not(.sticker-only){display:none!important}
+    body.print-sticker .sticker-only{display:block!important}
     header,.noprint{display:none!important}
     body{background:#fff}
     main{max-width:none;padding:0}
@@ -69,8 +77,8 @@
 
 <script>
 // ====== CONFIG: paste your Supabase project values here ======
-const SUPABASE_URL = 'https://yumrglreoawfyvviyxgh.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1bXJnbHJlb2F3Znl2dml5eGdoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDc3NjgxMDIsImV4cCI6MjA2MzM0NDEwMn0.q9Gl79BRgQSzw912C7_3tmmZEtRBMANoi-ALKAk4GxE';
+const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
+const SUPABASE_ANON_KEY = 'YOUR-ANON-PUBLIC-KEY';
 // =============================================================
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -266,7 +274,13 @@ async function renderComponent(id) {
       ${c.notes ? `<p>${esc(c.notes).replace(/\n/g, '<br>')}</p>` : ''}
       <div class="qr" style="margin-top:12px">${qrSvg(compUrl(c.id))}</div>
       <div class="row noprint" style="margin-top:10px;justify-content:center">
-        <button class="sec sm" onclick="window.print()">Print label</button>
+        <select id="ssize" style="flex:0 0 auto;width:auto;padding:6px">
+          <option value="1in">Sticker 1 in</option>
+          <option value="1.5in" selected>Sticker 1.5 in</option>
+          <option value="2in">Sticker 2 in</option>
+        </select>
+        <button class="sm" id="psticker">Print sticker</button>
+        <button class="sec sm" onclick="window.print()">Print full page</button>
         <button class="sec sm" id="edit">Edit</button>
         ${isOwner ? '<button class="bad sm" id="del">Delete</button>' : ''}
       </div>
@@ -286,6 +300,15 @@ async function renderComponent(id) {
           ${(r.performed_by === S.user.id || isOwner) ? `<button class="sec sm noprint" data-del="${r.id}" style="margin-top:6px">Delete</button>` : ''}
         </div>`).join('') || '<div class="mut">No records yet.</div>'}
     </div>`;
+  const st = document.createElement('div');
+  st.className = 'sticker-only';
+  st.innerHTML = `<div class="sticker">${qrSvg(compUrl(c.id))}<div class="sn">${esc(c.name)}</div>${c.location ? `<div class="sl">${esc(c.location)}</div>` : ''}</div>`;
+  app.appendChild(st);
+  document.getElementById('psticker').onclick = () => {
+    st.style.setProperty('--sw', document.getElementById('ssize').value);
+    document.body.classList.add('print-sticker');
+    window.print();
+  };
   document.getElementById('addrec').onclick = async () => {
     const description = document.getElementById('rd').value.trim(); if (!description) return setErr('Describe what was done');
     const { error } = await sb.from('records').insert({
@@ -354,6 +377,8 @@ function renderTeam() {
     await loadMembers(); renderTeam();
   });
 }
+
+window.addEventListener('afterprint', () => document.body.classList.remove('print-sticker'));
 
 // ---------- Boot ----------
 (async () => {
