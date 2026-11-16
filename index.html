@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Geminus Assets</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Geminus">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+<style>
+  :root{--bg:#f2f2f2;--card:#fff;--ink:#000;--mut:#666;--line:#cfcfcf;--acc:#000;--bad:#c62828;--ok:#2e7d32}
+  *{box-sizing:border-box}
+  body{margin:0;font:16px/1.4 "Helvetica Neue",Helvetica,Arial,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{background:var(--ink);color:#fff;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:5}
+  header h1{font-family:"Archivo Black",Impact,sans-serif;font-weight:400;font-size:18px;letter-spacing:.06em;text-transform:uppercase;margin:0;flex:1}
+  h2{font-family:"Archivo Black",Impact,sans-serif;font-weight:400;text-transform:uppercase;letter-spacing:.03em}
+  .tagline{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--mut);margin:-4px 0 14px}
+  header select,header button{font-size:14px}
+  main{max-width:760px;margin:0 auto;padding:14px}
+  .card{background:var(--card);border:1px solid #000;border-radius:0;padding:14px;margin-bottom:12px}
+  h2{font-size:18px;margin:0 0 10px}
+  label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
+  input,select,textarea{width:100%;padding:10px;border:1px solid #000;border-radius:0;font:inherit;background:#fff}
+  textarea{min-height:80px}
+  button{padding:10px 14px;border:1px solid #000;border-radius:0;text-transform:uppercase;letter-spacing:.05em;font-size:13px;background:var(--acc);color:#fff;font:inherit;cursor:pointer}
+  button.sec{background:#fff;color:#000}
+  button.bad{background:var(--bad)}
+  button.sm{padding:6px 10px;font-size:13px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .row>*{flex:1}
+  .row>button{flex:0 0 auto}
+  .item{display:block;padding:12px;border:1px solid #000;border-radius:0;margin-bottom:8px;background:#fff;color:inherit;text-decoration:none}
+  .item b{display:block}
+  .mut{color:var(--mut);font-size:13px}
+  .tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:0;background:#000;color:#fff;letter-spacing:.05em;text-transform:uppercase;font-size:11px;margin-right:6px}
+  .rec{border-left:4px solid #000;padding:6px 10px;margin:10px 0;background:#fafafa}
+  .err{color:var(--bad);font-size:14px;margin-top:8px;min-height:18px}
+  .qr{width:180px;height:180px;margin:0 auto}
+  .qr svg{width:100%;height:100%}
+  .labels{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+  .label{border:1px dashed #999;padding:8px;text-align:center;background:#fff;break-inside:avoid}
+  .label .q{width:130px;height:130px;margin:0 auto}
+  .label .q svg{width:100%;height:100%}
+  .label div.n{font-weight:600;font-size:13px;margin-top:4px;word-break:break-word}
+  .hide{display:none!important}
+  @media print{
+    header,.noprint{display:none!important}
+    body{background:#fff}
+    main{max-width:none;padding:0}
+    .card{border:0;padding:0}
+  }
+</style>
+</head>
+<body>
+<header class="noprint">
+  <h1>Geminus</h1>
+  <select id="wsSelect" class="hide"></select>
+  <button id="signOutBtn" class="sec sm hide">Sign out</button>
+</header>
+<main id="app"></main>
+
+<script>
+// ====== CONFIG: paste your Supabase project values here ======
+const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
+const SUPABASE_ANON_KEY = 'YOUR-ANON-PUBLIC-KEY';
+// =============================================================
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const app = document.getElementById('app');
+const wsSelect = document.getElementById('wsSelect');
+const signOutBtn = document.getElementById('signOutBtn');
+
+const S = { user: null, workspaces: [], ws: null, members: {}, components: [] };
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = d => new Date(d).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+const lastWs = { get: () => { try { return localStorage.getItem('mqr_ws'); } catch { return null; } },
+                 set: v => { try { localStorage.setItem('mqr_ws', v); } catch {} } };
+
+function appBase() { return location.origin + location.pathname; }
+function compUrl(id) { return appBase() + '#/c/' + id; }
+function qrSvg(text, cell = 4) {
+  const q = qrcode(0, 'M'); q.addData(text); q.make();
+  return q.createSvgTag({ cellSize: cell, margin: 2, scalable: true });
+}
+function setErr(msg) { const e = document.getElementById('err'); if (e) e.textContent = msg || ''; }
+
+// ---------- Routing ----------
+window.addEventListener('hashchange', route);
+async function route() {
+  if (!S.user) return renderAuth();
+  const h = location.hash;
+  let m;
+  if (!S.workspaces.length) return renderWorkspaceSetup();
+  if ((m = h.match(/^#\/c\/([0-9a-f-]{36})$/i))) return renderComponent(m[1]);
+  if (h === '#/new') return renderNew();
+  if (h === '#/labels') return renderLabels();
+  if (h === '#/team') return renderTeam();
+  return renderList();
+}
+
+// ---------- Auth ----------
+function renderAuth(mode = 'in') {
+  signOutBtn.classList.add('hide'); wsSelect.classList.add('hide');
+  app.innerHTML = `
+    <div class="card">
+      <h2>Geminus Assets</h2>
+      <div class="tagline">Physical form. Digital mind.</div>
+      <b>${mode === 'in' ? 'Sign in' : 'Create account'}</b>
+      <label>Email</label><input id="em" type="email" autocomplete="email">
+      <label>Password</label><input id="pw" type="password" autocomplete="${mode === 'in' ? 'current-password' : 'new-password'}">
+      <div class="err" id="err"></div>
+      <div class="row" style="margin-top:8px">
+        <button id="go">${mode === 'in' ? 'Sign in' : 'Sign up'}</button>
+        <button class="sec" id="sw">${mode === 'in' ? 'Need an account?' : 'Have an account?'}</button>
+      </div>
+    </div>`;
+  document.getElementById('sw').onclick = () => renderAuth(mode === 'in' ? 'up' : 'in');
+  document.getElementById('go').onclick = async () => {
+    const email = document.getElementById('em').value.trim();
+    const password = document.getElementById('pw').value;
+    setErr('');
+    if (mode === 'in') {
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) return setErr(error.message);
+    } else {
+      const { data, error } = await sb.auth.signUp({ email, password });
+      if (error) return setErr(error.message);
+      if (!data.session) return app.querySelector('.card').innerHTML =
+        '<h2>Check your email</h2><p>Confirm your address, then come back and sign in.</p>';
+    }
+  };
+}
+
+sb.auth.onAuthStateChange(async (_evt, session) => {
+  S.user = session?.user ?? null;
+  if (S.user) { await loadWorkspaces(); }
+  else { S.workspaces = []; S.ws = null; }
+  route();
+});
+
+signOutBtn.onclick = () => sb.auth.signOut();
+
+// ---------- Workspaces ----------
+async function loadWorkspaces() {
+  const { data } = await sb.from('workspaces').select('id,name,join_code').order('created_at');
+  S.workspaces = data || [];
+  const saved = lastWs.get();
+  S.ws = S.workspaces.find(w => w.id === saved) || S.workspaces[0] || null;
+  signOutBtn.classList.remove('hide');
+  wsSelect.classList.toggle('hide', !S.workspaces.length);
+  wsSelect.innerHTML = S.workspaces.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')
+    + '<option value="__new">+ New / join…</option>';
+  if (S.ws) wsSelect.value = S.ws.id;
+  if (S.ws) await loadMembers();
+}
+wsSelect.onchange = async () => {
+  if (wsSelect.value === '__new') { S.workspaces.length && (S.ws = null); return renderWorkspaceSetup(true); }
+  S.ws = S.workspaces.find(w => w.id === wsSelect.value);
+  lastWs.set(S.ws.id); await loadMembers(); location.hash = '#/'; route();
+};
+async function loadMembers() {
+  const { data } = await sb.from('workspace_members').select('user_id,display_name,role').eq('workspace_id', S.ws.id);
+  S.members = Object.fromEntries((data || []).map(m => [m.user_id, m]));
+}
+function renderWorkspaceSetup(canCancel) {
+  app.innerHTML = `
+    <div class="card"><h2>Create a workspace</h2>
+      <p class="mut">A workspace is one team (e.g. your employer). Everyone in it shares components and records.</p>
+      <label>Workspace name</label><input id="wname" placeholder="e.g. Hotel Maintenance">
+      <div class="err" id="err"></div>
+      <button id="mk" style="margin-top:8px">Create</button></div>
+    <div class="card"><h2>Or join one</h2>
+      <label>Join code (from a teammate)</label><input id="jc">
+      <div class="err" id="err2"></div>
+      <button id="jn" style="margin-top:8px">Join</button></div>
+    ${canCancel ? '<button class="sec" id="cx">Cancel</button>' : ''}`;
+  const finish = async id => { lastWs.set(id); await loadWorkspaces(); location.hash = '#/'; route(); };
+  document.getElementById('mk').onclick = async () => {
+    const name = document.getElementById('wname').value.trim(); if (!name) return setErr('Enter a name');
+    const { data, error } = await sb.rpc('create_workspace', { p_name: name });
+    if (error) return setErr(error.message); finish(data);
+  };
+  document.getElementById('jn').onclick = async () => {
+    const code = document.getElementById('jc').value.trim(); if (!code) return;
+    const { data, error } = await sb.rpc('join_workspace', { p_code: code });
+    if (error) return document.getElementById('err2').textContent = error.message; finish(data);
+  };
+  const cx = document.getElementById('cx');
+  if (cx) cx.onclick = async () => { await loadWorkspaces(); route(); };
+}
+
+// ---------- Nav ----------
+function nav(active) {
+  const t = (h, l) => `<a href="${h}" style="margin-right:14px;color:${active === h ? 'var(--acc)' : 'var(--ink)'};font-weight:${active === h ? 600 : 400}">${l}</a>`;
+  return `<div class="noprint" style="margin-bottom:12px">${t('#/', 'Components')}${t('#/new', '+ New')}${t('#/labels', 'Labels')}${t('#/team', 'Team')}</div>`;
+}
+
+// ---------- Component list ----------
+async function renderList() {
+  app.innerHTML = nav('#/') + '<div class="mut">Loading…</div>';
+  const { data, error } = await sb.from('components').select('*').eq('workspace_id', S.ws.id).order('name');
+  if (error) return app.innerHTML = `<div class="err">${esc(error.message)}</div>`;
+  S.components = data;
+  app.innerHTML = nav('#/') + `
+    <input id="q" placeholder="Search components…" style="margin-bottom:10px">
+    <div id="list"></div>`;
+  const draw = () => {
+    const q = document.getElementById('q').value.toLowerCase();
+    const rows = S.components.filter(c => [c.name, c.category, c.location].join(' ').toLowerCase().includes(q));
+    document.getElementById('list').innerHTML = rows.length ? rows.map(c => `
+      <a class="item" href="#/c/${c.id}"><b>${esc(c.name)}</b>
+        <span class="mut">${c.category ? `<span class="tag">${esc(c.category)}</span>` : ''}${esc(c.location || '')}</span></a>`).join('')
+      : '<div class="card mut">No components yet. Tap “+ New” to add one.</div>';
+  };
+  document.getElementById('q').oninput = draw; draw();
+}
+
+// ---------- New component ----------
+function renderNew() {
+  app.innerHTML = nav('#/new') + `
+    <div class="card"><h2>New component</h2>
+      <label>Name *</label><input id="n" placeholder="e.g. Rooftop AC Unit 2">
+      <label>Category</label><input id="cat" placeholder="e.g. HVAC, Plumbing, Electrical">
+      <label>Location</label><input id="loc" placeholder="e.g. Roof, Boiler room">
+      <label>Notes</label><textarea id="nt" placeholder="Model, serial number, anything useful"></textarea>
+      <div class="err" id="err"></div>
+      <button id="save" style="margin-top:8px">Save</button></div>`;
+  document.getElementById('save').onclick = async () => {
+    const name = document.getElementById('n').value.trim(); if (!name) return setErr('Name is required');
+    const { data, error } = await sb.from('components').insert({
+      workspace_id: S.ws.id, name,
+      category: document.getElementById('cat').value.trim() || null,
+      location: document.getElementById('loc').value.trim() || null,
+      notes: document.getElementById('nt').value.trim() || null
+    }).select().single();
+    if (error) return setErr(error.message);
+    location.hash = '#/c/' + data.id;
+  };
+}
+
+// ---------- Component detail ----------
+async function renderComponent(id) {
+  app.innerHTML = nav('') + '<div class="mut">Loading…</div>';
+  const { data: c, error } = await sb.from('components').select('*').eq('id', id).maybeSingle();
+  if (error || !c) return app.innerHTML = nav('') + '<div class="card">Component not found, or you are not in its workspace.</div>';
+  // switch workspace automatically if the scanned QR belongs to another one
+  if (c.workspace_id !== S.ws.id) {
+    S.ws = S.workspaces.find(w => w.id === c.workspace_id) || S.ws;
+    wsSelect.value = S.ws.id; lastWs.set(S.ws.id); await loadMembers();
+  }
+  const { data: recs } = await sb.from('records').select('*').eq('component_id', id).order('performed_at', { ascending: false });
+  const isOwner = S.members[S.user.id]?.role === 'owner';
+  app.innerHTML = nav('') + `
+    <div class="card">
+      <h2>${esc(c.name)}</h2>
+      <div class="mut">${c.category ? `<span class="tag">${esc(c.category)}</span>` : ''}${esc(c.location || '')}</div>
+      ${c.notes ? `<p>${esc(c.notes).replace(/\n/g, '<br>')}</p>` : ''}
+      <div class="qr" style="margin-top:12px">${qrSvg(compUrl(c.id))}</div>
+      <div class="row noprint" style="margin-top:10px;justify-content:center">
+        <button class="sec sm" onclick="window.print()">Print label</button>
+        <button class="sec sm" id="edit">Edit</button>
+        ${isOwner ? '<button class="bad sm" id="del">Delete</button>' : ''}
+      </div>
+    </div>
+    <div class="card noprint">
+      <h2>Log maintenance</h2>
+      <label>Type</label>
+      <select id="rt"><option>Service</option><option>Inspection</option><option>Repair</option><option>Replacement</option><option>Cleaning</option><option>Other</option></select>
+      <label>What was done *</label><textarea id="rd"></textarea>
+      <div class="err" id="err"></div>
+      <button id="addrec" style="margin-top:8px">Add record</button>
+    </div>
+    <div class="card"><h2>History (${(recs || []).length})</h2>
+      ${(recs || []).map(r => `
+        <div class="rec"><span class="tag">${esc(r.type)}</span><span class="mut">${fmt(r.performed_at)} · ${esc(S.members[r.performed_by]?.display_name || 'unknown')}</span>
+          <div>${esc(r.description).replace(/\n/g, '<br>')}</div>
+          ${(r.performed_by === S.user.id || isOwner) ? `<button class="sec sm noprint" data-del="${r.id}" style="margin-top:6px">Delete</button>` : ''}
+        </div>`).join('') || '<div class="mut">No records yet.</div>'}
+    </div>`;
+  document.getElementById('addrec').onclick = async () => {
+    const description = document.getElementById('rd').value.trim(); if (!description) return setErr('Describe what was done');
+    const { error } = await sb.from('records').insert({
+      component_id: c.id, workspace_id: c.workspace_id, type: document.getElementById('rt').value, description });
+    if (error) return setErr(error.message); renderComponent(id);
+  };
+  app.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this record?')) return;
+    await sb.from('records').delete().eq('id', b.dataset.del); renderComponent(id);
+  });
+  document.getElementById('edit').onclick = () => renderEdit(c);
+  const del = document.getElementById('del');
+  if (del) del.onclick = async () => {
+    if (!confirm('Delete this component and ALL its records?')) return;
+    const { error } = await sb.from('components').delete().eq('id', c.id);
+    if (error) return alert(error.message); location.hash = '#/';
+  };
+}
+function renderEdit(c) {
+  app.innerHTML = nav('') + `
+    <div class="card"><h2>Edit component</h2>
+      <label>Name *</label><input id="n" value="${esc(c.name)}">
+      <label>Category</label><input id="cat" value="${esc(c.category || '')}">
+      <label>Location</label><input id="loc" value="${esc(c.location || '')}">
+      <label>Notes</label><textarea id="nt">${esc(c.notes || '')}</textarea>
+      <div class="err" id="err"></div>
+      <div class="row" style="margin-top:8px"><button id="save">Save</button><button class="sec" id="cx">Cancel</button></div></div>`;
+  document.getElementById('cx').onclick = () => renderComponent(c.id);
+  document.getElementById('save').onclick = async () => {
+    const name = document.getElementById('n').value.trim(); if (!name) return setErr('Name is required');
+    const { error } = await sb.from('components').update({
+      name, category: document.getElementById('cat').value.trim() || null,
+      location: document.getElementById('loc').value.trim() || null,
+      notes: document.getElementById('nt').value.trim() || null }).eq('id', c.id);
+    if (error) return setErr(error.message); renderComponent(c.id);
+  };
+}
+
+// ---------- Print all labels ----------
+async function renderLabels() {
+  const { data } = await sb.from('components').select('id,name,location').eq('workspace_id', S.ws.id).order('name');
+  app.innerHTML = nav('#/labels') + `
+    <div class="noprint row" style="margin-bottom:10px"><div class="mut">QR labels for every component in this workspace.</div>
+      <button onclick="window.print()">Print</button></div>
+    <div class="labels">${(data || []).map(c => `
+      <div class="label"><div class="q">${qrSvg(compUrl(c.id))}</div>
+        <div class="n">${esc(c.name)}</div><div class="mut">${esc(c.location || '')}</div></div>`).join('')}</div>`;
+}
+
+// ---------- Team ----------
+function renderTeam() {
+  const isOwner = S.members[S.user.id]?.role === 'owner';
+  app.innerHTML = nav('#/team') + `
+    <div class="card"><h2>${esc(S.ws.name)}</h2>
+      <label>Join code (share with teammates)</label>
+      <input readonly value="${esc(S.ws.join_code)}" onclick="this.select()">
+    </div>
+    <div class="card"><h2>Members</h2>
+      ${Object.entries(S.members).map(([uid, m]) => `
+        <div class="row" style="padding:6px 0"><div>${esc(m.display_name || 'user')} <span class="tag">${m.role}</span></div>
+        ${(isOwner && uid !== S.user.id) ? `<button class="sec sm" data-rm="${uid}">Remove</button>` : ''}</div>`).join('')}
+    </div>`;
+  app.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
+    if (!confirm('Remove this member?')) return;
+    await sb.from('workspace_members').delete().eq('workspace_id', S.ws.id).eq('user_id', b.dataset.rm);
+    await loadMembers(); renderTeam();
+  });
+}
+
+// ---------- Boot ----------
+(async () => {
+  const { data } = await sb.auth.getSession();
+  if (!data.session) renderAuth();
+})();
+</script>
+</body>
+</html>
