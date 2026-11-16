@@ -107,8 +107,8 @@ async function route() {
   if (!S.user) return renderAuth();
   const h = location.hash;
   let m;
-  if (!S.workspaces.length) return renderWorkspaceSetup();
   if ((m = h.match(/^#\/c\/([0-9a-f-]{36})$/i))) return renderComponent(m[1]);
+  if (!S.workspaces.length) return renderWorkspaceSetup();
   if (h === '#/new') return renderNew();
   if (h === '#/labels') return renderLabels();
   if (h === '#/team') return renderTeam();
@@ -256,10 +256,10 @@ function renderNew() {
 }
 
 // ---------- Component detail ----------
-async function renderComponent(id) {
-  app.innerHTML = nav('') + '<div class="mut">Loading…</div>';
+async function renderComponent(id, afterJoin = false) {
+  app.innerHTML = '<div class="mut">Loading…</div>';
   const { data: c, error } = await sb.from('components').select('*').eq('id', id).maybeSingle();
-  if (error || !c) return app.innerHTML = nav('') + '<div class="card">Component not found, or you are not in its workspace.</div>';
+  if (error || !c) return renderJoinPrompt(id, afterJoin ? 'That join code is for a different workspace than this component.' : '');
   // switch workspace automatically if the scanned QR belongs to another one
   if (c.workspace_id !== S.ws.id) {
     S.ws = S.workspaces.find(w => w.id === c.workspace_id) || S.ws;
@@ -327,6 +327,32 @@ async function renderComponent(id) {
     if (error) return alert(error.message); location.hash = '#/';
   };
 }
+function renderJoinPrompt(id, msg) {
+  app.innerHTML = `
+    <div class="card">
+      <h2>You are not part of this workspace</h2>
+      <p>Please enter the join code to join this workspace and open this component.</p>
+      <p class="mut">Ask a teammate for the code. If this component was deleted, the code won't help.</p>
+      <label>Join code</label>
+      <input id="jc" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false">
+      <div class="err" id="err">${esc(msg)}</div>
+      <div class="row" style="margin-top:8px">
+        <button id="jn">Join workspace</button>
+        <button class="sec" id="home">Back</button>
+      </div>
+    </div>`;
+  document.getElementById('home').onclick = () => { location.hash = '#/'; };
+  document.getElementById('jn').onclick = async () => {
+    const code = document.getElementById('jc').value.trim();
+    if (!code) return setErr('Enter the join code');
+    setErr('');
+    const { error } = await sb.rpc('join_workspace', { p_code: code });
+    if (error) return setErr(error.message);
+    await loadWorkspaces();
+    renderComponent(id, true);
+  };
+}
+
 function renderEdit(c) {
   app.innerHTML = nav('') + `
     <div class="card"><h2>Edit component</h2>
