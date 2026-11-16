@@ -146,6 +146,29 @@
   .toast.bad{background:var(--bad)}
   .toast.out{opacity:0;transform:translateY(8px);transition:all .25s var(--ease)}
 
+  /* ---------- stage 1: fields, locations, panels ---------- */
+  .unitwrap{display:flex;align-items:stretch}
+  .unitwrap input{flex:1;min-width:0}
+  .unit{display:flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-left:0;background:var(--soft);font-size:13px;letter-spacing:.04em;white-space:nowrap}
+  .unit:empty{display:none}
+  .kvs{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));margin:14px 1px 1px 1px}
+  .kv{background:#fff;padding:10px 12px;min-width:0;border:1px solid var(--line);margin:0 -1px -1px 0}
+  .kv span{display:block;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut)}
+  .kv b{display:block;font-size:15px;word-break:break-word}
+  .panel{border:1px solid var(--line);background:#fafafa;padding:14px;margin:10px 0 14px}
+  .panel>label:first-child{margin-top:0}
+  .filters{display:flex;gap:8px;margin-bottom:14px}
+  .filters select{flex:1;min-width:0}
+  .trow{display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--soft)}
+  .trow .nm{flex:1;min-width:0;word-break:break-word}
+  .trow button{flex:0 0 auto}
+  .frow{padding:10px 0;border-top:1px solid var(--soft)}
+  .frow .top{display:flex;align-items:center;gap:8px}
+  .frow .top b{flex:1;min-width:0;word-break:break-word}
+  .frow .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .warn{border-color:var(--bad);background:#fff5f5}
+  .warn code{background:#fff;padding:1px 5px;border:1px solid #e0b4b4}
+  .linkbtn{display:block;text-decoration:none;color:inherit}
   .hide{display:none!important}
 
   /* ---------- sticker printing ---------- */
@@ -184,6 +207,7 @@
   <a href="#/"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>Assets</a>
   <a href="#/new"><svg viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></svg>New</a>
   <a href="#/labels"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM18 14h2M14 18h2"/></svg>Labels</a>
+  <a href="#/setup"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>Setup</a>
   <a href="#/team"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.5"/><path d="M17 14c2.5 0 4 2 4 5"/></svg>Team</a>
 </nav>
 <div id="toasts" class="noprint" aria-live="polite"></div>
@@ -200,7 +224,8 @@ const wsSelect = document.getElementById('wsSelect');
 const signOutBtn = document.getElementById('signOutBtn');
 const tabs = document.getElementById('tabs');
 
-const S = { user: null, workspaces: [], ws: null, members: {}, components: [], flash: false };
+const S = { user: null, workspaces: [], ws: null, members: {}, components: [], flash: false,
+  locations: [], types: [], fields: [], metaError: false, filter: { type: '', loc: '' }, locEdit: null };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = d => new Date(d).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
@@ -249,7 +274,108 @@ function updateTabs() {
   tabs.classList.toggle('hide', !show);
   document.body.classList.toggle('has-tabs', show);
   const h = (location.hash && location.hash !== '#') ? location.hash : '#/';
-  tabs.querySelectorAll('a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === h));
+  const hh = h.startsWith('#/type/') ? '#/setup' : h;
+  tabs.querySelectorAll('a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === hh));
+}
+
+// ---------- Stage 1 helpers: locations, types, custom fields ----------
+const amOwner = () => S.members[S.user?.id]?.role === 'owner';
+async function loadMeta() {
+  if (!S.ws) return;
+  const [l, t, f] = await Promise.all([
+    sb.from('locations').select('*').eq('workspace_id', S.ws.id),
+    sb.from('component_types').select('*').eq('workspace_id', S.ws.id).order('name'),
+    sb.from('field_defs').select('*').eq('workspace_id', S.ws.id).order('position').order('created_at')
+  ]);
+  S.metaError = !!(l.error || t.error || f.error);
+  S.locations = l.data || []; S.types = t.data || []; S.fields = f.data || [];
+}
+const migrationBanner = () => S.metaError ? `
+  <div class="card warn"><h2>One setup step left</h2>
+    <p>Locations and fields need a database update. In Supabase, open <b>SQL Editor</b>, paste the contents of <code>stage1.sql</code> and run it once. Then reload this page.</p></div>` : '';
+const locById = id => S.locations.find(l => l.id === id);
+const typeById = id => S.types.find(t => t.id === id);
+function locPath(id) {
+  const parts = []; let cur = locById(id), n = 0;
+  while (cur && n++ < 50) { parts.unshift(cur.name); cur = cur.parent_id ? locById(cur.parent_id) : null; }
+  return parts.join(' › ');
+}
+function locTree() {
+  const kids = {};
+  S.locations.forEach(l => { (kids[l.parent_id || 'root'] ??= []).push(l); });
+  Object.values(kids).forEach(a => a.sort((x, y) => x.name.localeCompare(y.name)));
+  const out = [];
+  const walk = (pid, d) => (kids[pid] || []).forEach(l => { out.push({ ...l, depth: d }); walk(l.id, d + 1); });
+  walk('root', 0);
+  return out;
+}
+function locAndDesc(id) {
+  const out = new Set([id]); let added = true;
+  while (added) { added = false; S.locations.forEach(l => { if (l.parent_id && out.has(l.parent_id) && !out.has(l.id)) { out.add(l.id); added = true; } }); }
+  return out;
+}
+function locOptions(sel, emptyLabel = '— none —', exclude = new Set()) {
+  return `<option value="">${esc(emptyLabel)}</option>` + locTree().filter(l => !exclude.has(l.id)).map(l =>
+    `<option value="${l.id}" ${l.id === sel ? 'selected' : ''}>${'  '.repeat(l.depth)}${l.depth ? '└ ' : ''}${esc(l.name)}</option>`).join('');
+}
+function typeOptions(sel, emptyLabel = '— none —') {
+  return `<option value="">${esc(emptyLabel)}</option>` + S.types.map(t =>
+    `<option value="${t.id}" ${t.id === sel ? 'selected' : ''}>${esc(t.name)}</option>`).join('');
+}
+const KINDS = { text: 'Text', number: 'Number', date: 'Date', select: 'Dropdown', bool: 'Yes / No' };
+function fieldInput(f, val) {
+  const a = `data-f="${f.id}" data-k="${f.kind}"`, v = val ?? '';
+  if (f.kind === 'number') return `<div class="unitwrap"><input ${a} type="number" step="any" inputmode="decimal" value="${esc(v)}"><span class="unit">${esc(f.unit || '')}</span></div>`;
+  if (f.kind === 'date') return `<input ${a} type="date" value="${esc(v)}">`;
+  if (f.kind === 'select') return `<select ${a}><option value="">—</option>${(f.options || []).map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+  if (f.kind === 'bool') return `<select ${a}><option value="">—</option><option value="true" ${v === true ? 'selected' : ''}>Yes</option><option value="false" ${v === false ? 'selected' : ''}>No</option></select>`;
+  return `<input ${a} value="${esc(v)}">`;
+}
+function fmtField(f, v) {
+  if (v === undefined || v === null || v === '') return '—';
+  if (f.kind === 'number') return v + (f.unit ? ' ' + f.unit : '');
+  if (f.kind === 'date') { const d = new Date(v + 'T00:00:00'); return isNaN(d) ? String(v) : d.toLocaleDateString([], { dateStyle: 'medium' }); }
+  if (f.kind === 'bool') return v ? 'Yes' : 'No';
+  return String(v);
+}
+// Add / edit a field definition inside `host`. `done` runs after saving.
+function openFieldForm(host, typeId, existing, done) {
+  const f = existing || { label: '', kind: 'text', unit: '', options: [] };
+  host.innerHTML = `
+    <div class="panel">
+      <label for="fl">Field name</label><input id="fl" value="${esc(f.label)}" placeholder="e.g. Voltage, Install date, Fuel">
+      <label for="fk">Kind</label>
+      <select id="fk">${Object.entries(KINDS).map(([k, n]) => `<option value="${k}" ${k === f.kind ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      <div id="fu-wrap"><label for="fu">Unit (optional)</label><input id="fu" value="${esc(f.unit || '')}" placeholder="e.g. kW, psi, °F"></div>
+      <div id="fo-wrap"><label for="fo">Choices (one per line)</label><textarea id="fo" placeholder="Gas&#10;Electric&#10;Oil">${esc((f.options || []).join('\n'))}</textarea></div>
+      <div class="err" id="ferr"></div>
+      <div class="row"><button id="fsave">${existing ? 'Save field' : 'Add field'}</button><button class="sec" id="fcancel">Cancel</button></div>
+    </div>`;
+  const sync = () => {
+    const k = host.querySelector('#fk').value;
+    host.querySelector('#fu-wrap').classList.toggle('hide', k !== 'number');
+    host.querySelector('#fo-wrap').classList.toggle('hide', k !== 'select');
+  };
+  host.querySelector('#fk').onchange = sync; sync();
+  host.querySelector('#fcancel').onclick = () => { host.innerHTML = ''; };
+  host.querySelector('#fsave').onclick = ev => busy(ev.currentTarget, async () => {
+    const label = host.querySelector('#fl').value.trim();
+    const kind = host.querySelector('#fk').value;
+    if (!label) return setErr('Give the field a name', 'ferr');
+    const options = kind === 'select'
+      ? [...new Set(host.querySelector('#fo').value.split('\n').map(x => x.trim()).filter(Boolean))] : [];
+    if (kind === 'select' && !options.length) return setErr('Add at least one choice', 'ferr');
+    const row = { label, kind, unit: kind === 'number' ? (host.querySelector('#fu').value.trim() || null) : null, options };
+    let error;
+    if (existing) ({ error } = await sb.from('field_defs').update(row).eq('id', existing.id));
+    else {
+      const pos = S.fields.filter(x => x.type_id === typeId).length;
+      ({ error } = await sb.from('field_defs').insert({ ...row, type_id: typeId, workspace_id: S.ws.id, position: pos }));
+    }
+    if (error) return setErr(error.message, 'ferr');
+    toast(existing ? 'Field saved' : 'Field added');
+    await loadMeta(); host.innerHTML = ''; done && done();
+  });
 }
 
 // ---------- Routing ----------
@@ -264,6 +390,8 @@ async function route() {
   if (h === '#/new') return renderNew();
   if (h === '#/labels') return renderLabels();
   if (h === '#/team') return renderTeam();
+  if (h === '#/setup') return renderSetup();
+  if ((m = h.match(/^#\/type\/([0-9a-f-]{36})$/i))) return renderType(m[1]);
   return renderList();
 }
 
@@ -328,13 +456,13 @@ async function loadWorkspaces() {
   wsSelect.innerHTML = S.workspaces.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')
     + '<option value="__new">+ New / join…</option>';
   if (S.ws) wsSelect.value = S.ws.id;
-  if (S.ws) await loadMembers();
+  if (S.ws) { await loadMembers(); await loadMeta(); }
   updateTabs();
 }
 wsSelect.onchange = async () => {
   if (wsSelect.value === '__new') { S.workspaces.length && (S.ws = null); updateTabs(); return renderWorkspaceSetup(true); }
   S.ws = S.workspaces.find(w => w.id === wsSelect.value);
-  lastWs.set(S.ws.id); await loadMembers(); location.hash = '#/'; route();
+  lastWs.set(S.ws.id); await loadMembers(); await loadMeta(); location.hash = '#/'; route();
 };
 async function loadMembers() {
   const { data } = await sb.from('workspace_members').select('user_id,display_name,role').eq('workspace_id', S.ws.id);
@@ -379,6 +507,7 @@ async function renderList() {
   if (!data.length) {
     app.innerHTML = `
       <div class="pagehead"><h2>Assets</h2></div>
+      ${migrationBanner()}
       <div class="card empty">
         <svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM18 14h2M14 18h2"/></svg>
         <h2>No components yet</h2>
@@ -387,48 +516,137 @@ async function renderList() {
       </div>`;
     return;
   }
+  const showFilters = S.types.length || S.locations.length;
   app.innerHTML = `
     <div class="pagehead"><h2>Assets</h2><span class="count" id="cnt"></span></div>
+    ${migrationBanner()}
     <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
       <input id="q" type="search" placeholder="Search components…" autocomplete="off"></div>
+    ${showFilters ? `<div class="filters">
+      <select id="ft" aria-label="Filter by type">${typeOptions(S.filter.type, 'All types')}</select>
+      <select id="fl" aria-label="Filter by location">${locOptions(S.filter.loc, 'All locations')}</select></div>` : ''}
     <div id="list"></div>`;
   const draw = () => {
     const q = document.getElementById('q').value.toLowerCase();
-    const rows = S.components.filter(c => [c.name, c.category, c.location].join(' ').toLowerCase().includes(q));
+    const locSet = S.filter.loc ? locAndDesc(S.filter.loc) : null;
+    const rows = S.components.filter(c => {
+      if (S.filter.type && c.type_id !== S.filter.type) return false;
+      if (locSet && !locSet.has(c.location_id)) return false;
+      const tn = c.type_id ? typeById(c.type_id)?.name : c.category;
+      const lp = c.location_id ? locPath(c.location_id) : c.location;
+      return [c.name, tn, lp].join(' ').toLowerCase().includes(q);
+    });
     document.getElementById('cnt').textContent = rows.length + (rows.length === 1 ? ' component' : ' components');
-    document.getElementById('list').innerHTML = rows.length ? rows.map((c, i) => `
+    document.getElementById('list').innerHTML = rows.length ? rows.map((c, i) => {
+      const tn = c.type_id ? typeById(c.type_id)?.name : c.category;
+      const lp = c.location_id ? locPath(c.location_id) : (c.location || '');
+      return `
       <a class="item" href="#/c/${c.id}" style="animation-delay:${Math.min(i, 8) * 40}ms">
         <div class="t"><b>${esc(c.name)}</b>
-          <span class="mut">${c.category ? `<span class="tag">${esc(c.category)}</span>` : ''}${esc(c.location || '')}</span></div>
-        <span class="arrow">→</span></a>`).join('')
-      : '<div class="card mut" style="text-align:center">Nothing matches that search.</div>';
+          <span class="mut">${tn ? `<span class="tag">${esc(tn)}</span>` : ''}${esc(lp)}</span></div>
+        <span class="arrow">→</span></a>`;
+    }).join('') : '<div class="card mut" style="text-align:center">Nothing matches.</div>';
   };
-  document.getElementById('q').oninput = draw; draw();
+  document.getElementById('q').oninput = draw;
+  const ft = document.getElementById('ft'), fl = document.getElementById('fl');
+  if (ft) ft.onchange = () => { S.filter.type = ft.value; draw(); };
+  if (fl) fl.onchange = () => { S.filter.loc = fl.value; draw(); };
+  draw();
 }
 
-// ---------- New component ----------
-function renderNew() {
+// ---------- New / edit component ----------
+function renderNew() { renderComponentForm(null); }
+function renderComponentForm(c) {
+  const editing = !!c;
+  let typeId = c?.type_id || '';
+  let locId = c?.location_id || '';
+  const custom = { ...(c?.custom || {}) };
   app.innerHTML = `
-    <div class="pagehead"><h2>New component</h2></div>
+    <div class="pagehead"><h2>${editing ? 'Edit component' : 'New component'}</h2></div>
+    ${migrationBanner()}
     <div class="card">
-      <label for="n">Name *</label><input id="n" placeholder="e.g. Rooftop AC Unit 2" autocomplete="off">
-      <label for="cat">Category</label><input id="cat" placeholder="e.g. HVAC, Plumbing, Electrical" autocomplete="off">
-      <label for="loc">Location</label><input id="loc" placeholder="e.g. Roof, Boiler room" autocomplete="off">
-      <label for="nt">Notes</label><textarea id="nt" placeholder="Model, serial number, anything useful"></textarea>
+      <label for="n">Name *</label><input id="n" value="${esc(c?.name || '')}" placeholder="e.g. Rooftop AC Unit 2" autocomplete="off">
+
+      <label for="ty">Type</label>
+      <div class="row"><select id="ty">${typeOptions(typeId)}</select><button type="button" class="sec sm" id="addty">+ Type</button></div>
+      <div id="qty"></div>
+      <div id="cf"></div>
+      <div id="afhost"></div>
+      <div id="afbtn"></div>
+
+      <label for="lo">Location</label>
+      <div class="row"><select id="lo">${locOptions(locId)}</select><button type="button" class="sec sm" id="addlo">+ Location</button></div>
+      <div id="qlo"></div>
+
+      <label for="nt">Notes</label><textarea id="nt" placeholder="Model, serial number, anything useful">${esc(c?.notes || '')}</textarea>
       <div class="err" id="err"></div>
-      <button id="save">Save component</button></div>`;
-  document.getElementById('n').focus({ preventScroll: true });
-  document.getElementById('save').onclick = ev => busy(ev.currentTarget, async () => {
-    const name = document.getElementById('n').value.trim(); if (!name) return setErr('Name is required');
-    const { data, error } = await sb.from('components').insert({
-      workspace_id: S.ws.id, name,
-      category: document.getElementById('cat').value.trim() || null,
-      location: document.getElementById('loc').value.trim() || null,
-      notes: document.getElementById('nt').value.trim() || null
-    }).select().single();
-    if (error) return setErr(error.message);
-    toast('Component created');
-    location.hash = '#/c/' + data.id;
+      <div class="row"><button id="save">${editing ? 'Save' : 'Save component'}</button>${editing ? '<button class="sec" id="cx">Cancel</button>' : ''}</div>
+    </div>`;
+  const $ = id => document.getElementById(id);
+
+  // read whatever is typed into the field inputs into `custom`
+  const syncCustom = () => $('cf').querySelectorAll('[data-f]').forEach(el => {
+    const id = el.dataset.f, k = el.dataset.k; let v = el.value;
+    if (v === '') { delete custom[id]; return; }
+    custom[id] = k === 'number' ? Number(v) : k === 'bool' ? v === 'true' : v;
+  });
+  const drawCF = () => {
+    syncCustom();
+    const defs = S.fields.filter(f => f.type_id === typeId);
+    $('cf').innerHTML = !typeId ? '' : defs.length
+      ? defs.map(f => `<label>${esc(f.label)}${f.kind === 'number' && f.unit ? ` (${esc(f.unit)})` : ''}</label>${fieldInput(f, custom[f.id])}`).join('')
+      : '<p class="mut">This type has no fields yet.</p>';
+    $('afbtn').innerHTML = typeId ? '<button type="button" class="sec sm" id="addfield" style="margin-top:12px">+ Add field</button>' : '';
+    const b = $('addfield');
+    if (b) b.onclick = () => openFieldForm($('afhost'), typeId, null, drawCF);
+  };
+  drawCF();
+  $('ty').onchange = () => { syncCustom(); typeId = $('ty').value; $('afhost').innerHTML = ''; drawCF(); };
+  $('lo').onchange = () => { locId = $('lo').value; };
+
+  $('addty').onclick = () => {
+    $('qty').innerHTML = `<div class="panel"><label for="qtn">New type name</label><input id="qtn" placeholder="e.g. Boiler, Pump, Fire extinguisher">
+      <div class="err" id="qterr"></div><div class="row"><button id="qtsave">Add type</button><button class="sec" id="qtcancel">Cancel</button></div></div>`;
+    $('qtcancel').onclick = () => { $('qty').innerHTML = ''; };
+    onEnter('qtn', 'qtsave');
+    $('qtsave').onclick = ev => busy(ev.currentTarget, async () => {
+      const name = $('qtn').value.trim(); if (!name) return setErr('Enter a name', 'qterr');
+      const { data, error } = await sb.from('component_types').insert({ workspace_id: S.ws.id, name }).select().single();
+      if (error) return setErr(error.message, 'qterr');
+      await loadMeta(); syncCustom(); typeId = data.id;
+      $('ty').innerHTML = typeOptions(typeId); $('qty').innerHTML = ''; toast('Type added'); drawCF();
+    });
+  };
+  $('addlo').onclick = () => {
+    $('qlo').innerHTML = `<div class="panel"><label for="qln">New location name</label><input id="qln" placeholder="e.g. Boiler room">
+      <label for="qlp">Inside</label><select id="qlp">${locOptions(locId, '— top level —')}</select>
+      <div class="err" id="qlerr"></div><div class="row"><button id="qlsave">Add location</button><button class="sec" id="qlcancel">Cancel</button></div></div>`;
+    $('qlcancel').onclick = () => { $('qlo').innerHTML = ''; };
+    onEnter('qln', 'qlsave');
+    $('qlsave').onclick = ev => busy(ev.currentTarget, async () => {
+      const name = $('qln').value.trim(); if (!name) return setErr('Enter a name', 'qlerr');
+      const { data, error } = await sb.from('locations').insert({ workspace_id: S.ws.id, name, parent_id: $('qlp').value || null }).select().single();
+      if (error) return setErr(error.message, 'qlerr');
+      await loadMeta(); locId = data.id;
+      $('lo').innerHTML = locOptions(locId); $('qlo').innerHTML = ''; toast('Location added');
+    });
+  };
+
+  if (editing) $('cx').onclick = () => renderComponent(c.id);
+  else $('n').focus({ preventScroll: true });
+  $('save').onclick = ev => busy(ev.currentTarget, async () => {
+    const name = $('n').value.trim(); if (!name) return setErr('Name is required');
+    syncCustom();
+    const row = { name, type_id: typeId || null, location_id: locId || null, custom, notes: $('nt').value.trim() || null };
+    if (editing) {
+      const { error } = await sb.from('components').update(row).eq('id', c.id);
+      if (error) return setErr(error.message);
+      toast('Saved'); renderComponent(c.id);
+    } else {
+      const { data, error } = await sb.from('components').insert({ ...row, workspace_id: S.ws.id }).select().single();
+      if (error) return setErr(error.message);
+      toast('Component created'); location.hash = '#/c/' + data.id;
+    }
   });
 }
 
@@ -441,16 +659,20 @@ async function renderComponent(id, afterJoin = false) {
   // switch workspace automatically if the scanned QR belongs to another one
   if (c.workspace_id !== S.ws.id) {
     S.ws = S.workspaces.find(w => w.id === c.workspace_id) || S.ws;
-    wsSelect.value = S.ws.id; lastWs.set(S.ws.id); await loadMembers();
+    wsSelect.value = S.ws.id; lastWs.set(S.ws.id); await loadMembers(); await loadMeta();
   }
   updateTabs();
   const { data: recs } = await sb.from('records').select('*').eq('component_id', id).order('performed_at', { ascending: false });
   const isOwner = S.members[S.user.id]?.role === 'owner';
   let recType = 'Service';
+  const tName = c.type_id ? typeById(c.type_id)?.name : c.category;
+  const lPath = c.location_id ? locPath(c.location_id) : (c.location || '');
+  const defs = c.type_id ? S.fields.filter(f => f.type_id === c.type_id) : [];
   app.innerHTML = `
     <div class="card">
       <h2 class="big">${esc(c.name)}</h2>
-      <div class="mut">${c.category ? `<span class="tag">${esc(c.category)}</span>` : ''}${esc(c.location || '')}</div>
+      <div class="mut">${tName ? `<span class="tag">${esc(tName)}</span>` : ''}${esc(lPath)}</div>
+      ${defs.length ? `<div class="kvs">${defs.map(f => `<div class="kv"><span>${esc(f.label)}</span><b>${esc(fmtField(f, c.custom?.[f.id]))}</b></div>`).join('')}</div>` : ''}
       ${c.notes ? `<p>${esc(c.notes).replace(/\n/g, '<br>')}</p>` : ''}
       <div class="qrframe"><div class="qr">${qrSvg(compUrl(c.id))}</div></div>
       <div class="qrcap">Scan to log maintenance</div>
@@ -489,7 +711,7 @@ async function renderComponent(id, afterJoin = false) {
   // sticker print block
   const st = document.createElement('div');
   st.className = 'sticker-only';
-  st.innerHTML = `<div class="sticker">${qrSvg(compUrl(c.id))}<div class="sn">${esc(c.name)}</div>${c.location ? `<div class="sl">${esc(c.location)}</div>` : ''}</div>`;
+  st.innerHTML = `<div class="sticker">${qrSvg(compUrl(c.id))}<div class="sn">${esc(c.name)}</div>${lPath ? `<div class="sl">${esc(lPath)}</div>` : ''}</div>`;
   app.appendChild(st);
   document.getElementById('psticker').onclick = () => {
     st.style.setProperty('--sw', document.getElementById('ssize').value);
@@ -556,38 +778,147 @@ function renderJoinPrompt(id, msg) {
   });
 }
 
-function renderEdit(c) {
-  app.innerHTML = `
-    <div class="pagehead"><h2>Edit component</h2></div>
-    <div class="card">
-      <label for="n">Name *</label><input id="n" value="${esc(c.name)}">
-      <label for="cat">Category</label><input id="cat" value="${esc(c.category || '')}">
-      <label for="loc">Location</label><input id="loc" value="${esc(c.location || '')}">
-      <label for="nt">Notes</label><textarea id="nt">${esc(c.notes || '')}</textarea>
-      <div class="err" id="err"></div>
-      <div class="row"><button id="save">Save</button><button class="sec" id="cx">Cancel</button></div></div>`;
-  document.getElementById('cx').onclick = () => renderComponent(c.id);
-  document.getElementById('save').onclick = ev => busy(ev.currentTarget, async () => {
-    const name = document.getElementById('n').value.trim(); if (!name) return setErr('Name is required');
-    const { error } = await sb.from('components').update({
-      name, category: document.getElementById('cat').value.trim() || null,
-      location: document.getElementById('loc').value.trim() || null,
-      notes: document.getElementById('nt').value.trim() || null }).eq('id', c.id);
-    if (error) return setErr(error.message);
-    toast('Saved'); renderComponent(c.id);
-  });
-}
+function renderEdit(c) { renderComponentForm(c); }
 
 // ---------- Print all labels ----------
 async function renderLabels() {
   app.innerHTML = `<div class="pagehead"><h2>Labels</h2></div>` + skeleton(3);
-  const { data } = await sb.from('components').select('id,name,location').eq('workspace_id', S.ws.id).order('name');
+  const { data } = await sb.from('components').select('id,name,location,location_id').eq('workspace_id', S.ws.id).order('name');
   app.innerHTML = `
     <div class="pagehead noprint"><h2>Labels</h2><button class="sm" onclick="window.print()">Print all</button></div>
     ${(data || []).length ? `<div class="labels">${data.map((c, i) => `
       <div class="label" style="animation:rise .32s var(--ease) ${Math.min(i, 10) * 35}ms both"><div class="q">${qrSvg(compUrl(c.id))}</div>
-        <div class="n">${esc(c.name)}</div><div class="mut">${esc(c.location || '')}</div></div>`).join('')}</div>`
+        <div class="n">${esc(c.name)}</div><div class="mut">${esc(c.location_id ? locPath(c.location_id) : (c.location || ''))}</div></div>`).join('')}</div>`
       : '<div class="card mut" style="text-align:center">No components yet. Add one first.</div>'}`;
+}
+
+// ---------- Setup: locations + component types ----------
+function renderSetup() {
+  const owner = amOwner();
+  const ed = S.locEdit;
+  const excl = ed?.id ? locAndDesc(ed.id) : new Set();
+  app.innerHTML = `
+    <div class="pagehead"><h2>Setup</h2><span class="count">${esc(S.ws.name)}</span></div>
+    ${migrationBanner()}
+    <div class="card"><h2>Component types</h2>
+      <p class="mut">A type groups similar equipment (Boiler, Pump…) and decides which fields it has.</p>
+      ${S.types.map(t => `<a class="trow linkbtn" href="#/type/${t.id}"><span class="nm"><b>${esc(t.name)}</b> <span class="mut">${S.fields.filter(f => f.type_id === t.id).length} fields</span></span><span>→</span></a>`).join('') || '<div class="mut">No types yet.</div>'}
+      <div class="row" style="margin-top:12px"><input id="tn" placeholder="New type, e.g. Boiler" autocomplete="off"><button id="tadd">Add type</button></div>
+      <div class="err" id="terr"></div>
+    </div>
+    <div class="card"><h2>Locations</h2>
+      <p class="mut">Buildings, floors, rooms. Put a location inside another to build a tree.</p>
+      ${ed ? `<div class="panel">
+        <label for="ln">${ed.id ? 'Rename / move location' : 'New location'}</label>
+        <input id="ln" value="${esc(ed.id ? locById(ed.id)?.name : '')}" placeholder="e.g. Building A, Floor 2, Boiler room" autocomplete="off">
+        <label for="lp">Inside</label><select id="lp">${locOptions(ed.parent_id, '— top level —', excl)}</select>
+        <div class="err" id="lerr"></div>
+        <div class="row"><button id="lsave">Save</button><button class="sec" id="lcancel">Cancel</button>${ed.id && owner ? '<button class="bad" id="ldel">Delete</button>' : ''}</div>
+      </div>` : ''}
+      ${locTree().map(l => `<div class="trow" style="padding-left:${l.depth * 18}px"><span class="nm">${l.depth ? '└ ' : ''}${esc(l.name)}</span>
+        <button class="sec sm" data-sub="${l.id}">+ Sub</button><button class="sec sm" data-edit="${l.id}">Edit</button></div>`).join('') || '<div class="mut">No locations yet.</div>'}
+      ${ed ? '' : '<button id="ladd" style="margin-top:12px">+ Add location</button>'}
+    </div>`;
+  const $ = id => document.getElementById(id);
+  onEnter('tn', 'tadd');
+  $('tadd').onclick = ev => busy(ev.currentTarget, async () => {
+    const name = $('tn').value.trim(); if (!name) return setErr('Enter a type name', 'terr');
+    const { data, error } = await sb.from('component_types').insert({ workspace_id: S.ws.id, name }).select().single();
+    if (error) return setErr(error.message, 'terr');
+    await loadMeta(); toast('Type added — now add its fields'); location.hash = '#/type/' + data.id;
+  });
+  const lad = $('ladd'); if (lad) lad.onclick = () => { S.locEdit = { id: null, parent_id: '' }; renderSetup(); };
+  app.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { S.locEdit = { id: null, parent_id: b.dataset.sub }; renderSetup(); $('ln')?.focus(); });
+  app.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
+    const l = locById(b.dataset.edit); S.locEdit = { id: l.id, parent_id: l.parent_id || '' }; renderSetup(); $('ln')?.focus();
+  });
+  if (ed) {
+    onEnter('ln', 'lsave');
+    $('lcancel').onclick = () => { S.locEdit = null; renderSetup(); };
+    $('lsave').onclick = ev => busy(ev.currentTarget, async () => {
+      const name = $('ln').value.trim(); if (!name) return setErr('Enter a name', 'lerr');
+      const parent_id = $('lp').value || null;
+      const { error } = ed.id
+        ? await sb.from('locations').update({ name, parent_id }).eq('id', ed.id)
+        : await sb.from('locations').insert({ workspace_id: S.ws.id, name, parent_id });
+      if (error) return setErr(error.message, 'lerr');
+      S.locEdit = null; await loadMeta(); toast('Location saved'); renderSetup();
+    });
+    const dl = $('ldel');
+    if (dl) dl.onclick = () => {
+      if (!confirm('Delete this location? Locations inside it move to the top level, and components here lose their location.')) return;
+      busy(dl, async () => {
+        const { error } = await sb.from('locations').delete().eq('id', ed.id);
+        if (error) return setErr(error.message, 'lerr');
+        S.locEdit = null; await loadMeta(); toast('Location deleted'); renderSetup();
+      });
+    };
+  }
+}
+
+function renderType(id) {
+  const t = typeById(id);
+  if (!t) { app.innerHTML = `<div class="card">Type not found.<div class="row" style="margin-top:10px"><button onclick="location.hash='#/setup'">Back to setup</button></div></div>`; return; }
+  const defs = S.fields.filter(f => f.type_id === id);
+  const owner = amOwner();
+  app.innerHTML = `
+    <div class="pagehead"><h2>${esc(t.name)}</h2><a class="count" href="#/setup">← Setup</a></div>
+    <div class="card"><label for="tname" style="margin-top:0">Type name</label>
+      <div class="row"><input id="tname" value="${esc(t.name)}"><button class="sec" id="trename">Rename</button></div>
+      <div class="err" id="err"></div></div>
+    <div class="card"><h2>Fields (${defs.length})</h2>
+      <p class="mut">Every component of this type shows these fields.</p>
+      ${defs.map((f, i) => `<div class="frow">
+        <div class="top"><b>${esc(f.label)}</b><span class="tag line">${KINDS[f.kind]}</span></div>
+        <div class="mut">${f.kind === 'number' && f.unit ? 'Unit: ' + esc(f.unit) : ''}${f.kind === 'select' ? esc((f.options || []).join(' · ')) : ''}</div>
+        <div class="acts">
+          <button class="sec sm" data-up="${f.id}" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button>
+          <button class="sec sm" data-down="${f.id}" ${i === defs.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button>
+          <button class="sec sm" data-fedit="${f.id}">Edit</button>
+          ${owner ? `<button class="bad sm" data-fdel="${f.id}">Delete</button>` : ''}
+        </div>
+        <div data-host="${f.id}"></div></div>`).join('') || '<div class="mut">No fields yet. Add the first one.</div>'}
+      <div id="newfield"></div>
+      <button id="addfield" style="margin-top:14px">+ Add field</button>
+    </div>
+    ${owner ? `<div class="card"><h2>Delete type</h2><p class="mut">Components keep their data but lose this type.</p><button class="bad" id="tdel">Delete type</button></div>` : ''}`;
+  const $ = id => document.getElementById(id);
+  const redo = () => renderType(id);
+  $('trename').onclick = ev => busy(ev.currentTarget, async () => {
+    const name = $('tname').value.trim(); if (!name) return setErr('Enter a name');
+    const { error } = await sb.from('component_types').update({ name }).eq('id', id);
+    if (error) return setErr(error.message);
+    await loadMeta(); toast('Renamed'); redo();
+  });
+  $('addfield').onclick = () => openFieldForm($('newfield'), id, null, redo);
+  app.querySelectorAll('[data-fedit]').forEach(b => b.onclick = () =>
+    openFieldForm(app.querySelector(`[data-host="${b.dataset.fedit}"]`), id, defs.find(f => f.id === b.dataset.fedit), redo));
+  const move = async (fid, dir) => {
+    const arr = [...defs]; const i = arr.findIndex(f => f.id === fid), j = i + dir;
+    if (j < 0 || j >= arr.length) return;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    await Promise.all(arr.map((f, k) => sb.from('field_defs').update({ position: k }).eq('id', f.id)));
+    await loadMeta(); redo();
+  };
+  app.querySelectorAll('[data-up]').forEach(b => b.onclick = () => busy(b, () => move(b.dataset.up, -1)));
+  app.querySelectorAll('[data-down]').forEach(b => b.onclick = () => busy(b, () => move(b.dataset.down, 1)));
+  app.querySelectorAll('[data-fdel]').forEach(b => b.onclick = () => {
+    if (!confirm('Delete this field? Values already entered stay hidden in the database but will no longer show.')) return;
+    busy(b, async () => {
+      const { error } = await sb.from('field_defs').delete().eq('id', b.dataset.fdel);
+      if (error) return toast(friendlyErr(error.message), true);
+      await loadMeta(); toast('Field deleted'); redo();
+    });
+  });
+  const td = $('tdel');
+  if (td) td.onclick = () => {
+    if (!confirm('Delete this type and all its fields?')) return;
+    busy(td, async () => {
+      const { error } = await sb.from('component_types').delete().eq('id', id);
+      if (error) return toast(friendlyErr(error.message), true);
+      await loadMeta(); toast('Type deleted'); location.hash = '#/setup';
+    });
+  };
 }
 
 // ---------- Team ----------
