@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Geminus Assets</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -16,41 +16,139 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <style>
-  :root{--bg:#f2f2f2;--card:#fff;--ink:#000;--mut:#666;--line:#cfcfcf;--acc:#000;--bad:#c62828;--ok:#2e7d32}
-  *{box-sizing:border-box}
-  body{margin:0;font:16px/1.4 "Helvetica Neue",Helvetica,Arial,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
-  header{background:var(--ink);color:#fff;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:5}
-  header h1{font-family:"Archivo Black",Impact,sans-serif;font-weight:400;font-size:18px;letter-spacing:.06em;text-transform:uppercase;margin:0;flex:1}
-  h2{font-family:"Archivo Black",Impact,sans-serif;font-weight:400;text-transform:uppercase;letter-spacing:.03em}
-  .tagline{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--mut);margin:-4px 0 14px}
-  header select,header button{font-size:14px}
-  main{max-width:760px;margin:0 auto;padding:14px}
-  .card{background:var(--card);border:1px solid #000;border-radius:0;padding:14px;margin-bottom:12px}
-  h2{font-size:18px;margin:0 0 10px}
-  label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
-  input,select,textarea{width:100%;padding:10px;border:1px solid #000;border-radius:0;font:inherit;background:#fff}
-  textarea{min-height:80px}
-  button{padding:10px 14px;border:1px solid #000;border-radius:0;text-transform:uppercase;letter-spacing:.05em;font-size:13px;background:var(--acc);color:#fff;font:inherit;cursor:pointer}
-  button.sec{background:#fff;color:#000}
-  button.bad{background:var(--bad)}
-  button.sm{padding:6px 10px;font-size:13px}
+  :root{
+    --bg:#f4f4f2;--card:#fff;--ink:#0a0a0a;--mut:#6b6b6b;--line:#0a0a0a;--soft:#e9e9e6;
+    --bad:#c62828;--ease:cubic-bezier(.2,.7,.2,1);--display:"Archivo Black",Impact,"Arial Black",sans-serif;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html{scroll-behavior:smooth}
+  body{margin:0;font:16px/1.45 "Helvetica Neue",Helvetica,Arial,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+  body.has-tabs main{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
+
+  /* ---------- header ---------- */
+  header{background:var(--ink);color:#fff;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:20}
+  .brand{display:flex;align-items:center;gap:10px;flex:1;min-width:0;color:#fff;text-decoration:none}
+  .brand svg{width:22px;height:22px;flex:0 0 auto}
+  .brand h1{font-family:var(--display);font-weight:400;font-size:17px;letter-spacing:.08em;text-transform:uppercase;margin:0}
+  header select{width:auto;max-width:46vw;background:#000;color:#fff;border:1px solid #fff;padding:6px 8px;font-size:13px;min-height:36px;cursor:pointer}
+  header button{min-height:36px;padding:6px 10px;font-size:12px}
+
+  /* ---------- layout ---------- */
+  main{max-width:760px;margin:0 auto;padding:18px 14px}
+  h2{font-family:var(--display);font-weight:400;text-transform:uppercase;letter-spacing:.03em;font-size:18px;margin:0 0 10px;line-height:1.15}
+  h2.big{font-size:24px}
+  .pagehead{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:2px 0 12px}
+  .pagehead h2{margin:0;font-size:22px}
+  .count{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut)}
+  .tagline{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--mut);margin:-2px 0 18px}
+  .mut{color:var(--mut);font-size:13px}
+  .card{background:var(--card);border:1px solid var(--line);padding:16px;margin-bottom:14px}
+  label{display:block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:14px 0 6px}
+
+  /* ---------- motion: every view rises in ---------- */
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes shimmer{0%{background-position:-300px 0}100%{background-position:300px 0}}
+  @keyframes flash{0%{background:#0a0a0a;color:#fff}100%{background:#fafafa;color:inherit}}
+  @keyframes toastin{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}
+  #app>*{animation:rise .32s var(--ease) both}
+  #app>*:nth-child(2){animation-delay:.04s}
+  #app>*:nth-child(3){animation-delay:.08s}
+  #app>*:nth-child(4){animation-delay:.12s}
+  #app>*:nth-child(n+5){animation-delay:.16s}
+
+  /* ---------- form controls ---------- */
+  input,select,textarea{width:100%;padding:12px;min-height:46px;border:1px solid var(--line);border-radius:0;font:inherit;background:#fff;color:var(--ink);transition:box-shadow .15s var(--ease),transform .15s var(--ease)}
+  input:focus,select:focus,textarea:focus{outline:none;box-shadow:4px 4px 0 var(--ink);transform:translate(-2px,-2px)}
+  textarea{min-height:92px;resize:vertical}
+  button{padding:12px 16px;min-height:46px;border:1px solid var(--line);border-radius:0;text-transform:uppercase;letter-spacing:.07em;font:inherit;font-size:13px;font-weight:600;background:var(--ink);color:#fff;cursor:pointer;transition:transform .12s var(--ease),box-shadow .15s var(--ease),background .15s,color .15s}
+  button:focus-visible,a:focus-visible{outline:3px solid #1f6feb;outline-offset:2px}
+  button:active{transform:scale(.97)}
+  button:disabled{opacity:.6;cursor:default}
+  button.sec{background:#fff;color:var(--ink)}
+  button.bad{background:var(--bad);border-color:var(--bad)}
+  button.sm{min-height:38px;padding:8px 12px;font-size:12px}
+  button.loading::after{content:"";display:inline-block;width:13px;height:13px;margin-left:9px;vertical-align:-2px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .6s linear infinite}
+  @media (hover:hover){
+    button:not(:disabled):hover{box-shadow:3px 3px 0 var(--ink);transform:translate(-2px,-2px)}
+    button:not(:disabled):active{transform:scale(.97);box-shadow:none}
+    button.sec:not(:disabled):hover{background:var(--ink);color:#fff}
+    header button:not(:disabled):hover{box-shadow:3px 3px 0 #fff}
+  }
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
   .row>*{flex:1}
   .row>button{flex:0 0 auto}
-  .item{display:block;padding:12px;border:1px solid #000;border-radius:0;margin-bottom:8px;background:#fff;color:inherit;text-decoration:none}
-  .item b{display:block}
-  .mut{color:var(--mut);font-size:13px}
-  .tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:0;background:#000;color:#fff;letter-spacing:.05em;text-transform:uppercase;font-size:11px;margin-right:6px}
-  .rec{border-left:4px solid #000;padding:6px 10px;margin:10px 0;background:#fafafa}
-  .err{color:var(--bad);font-size:14px;margin-top:8px;min-height:18px}
-  .qr{width:180px;height:180px;margin:0 auto}
-  .qr svg{width:100%;height:100%}
-  .labels{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
-  .label{border:1px dashed #999;padding:8px;text-align:center;background:#fff;break-inside:avoid}
+  .err{color:var(--bad);font-size:14px;margin-top:10px;min-height:20px}
+  .pwwrap{position:relative}
+  .pwwrap input{padding-right:70px}
+  .pwwrap button{position:absolute;right:4px;top:4px;min-height:38px;padding:0 10px;font-size:11px}
+
+  /* ---------- chips (record type) ---------- */
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{min-height:40px;padding:8px 14px;background:#fff;color:var(--ink);font-size:12px}
+  .chip[aria-pressed="true"]{background:var(--ink);color:#fff}
+
+  /* ---------- list ---------- */
+  .search{position:relative;margin-bottom:14px}
+  .search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:18px;height:18px;stroke:var(--mut);fill:none;stroke-width:2;pointer-events:none}
+  .search input{padding-left:40px}
+  .item{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid var(--line);margin-bottom:10px;background:#fff;color:inherit;text-decoration:none;transition:transform .15s var(--ease),box-shadow .15s var(--ease);animation:rise .32s var(--ease) both}
+  .item .t{flex:1;min-width:0}
+  .item b{display:block;font-size:16px;overflow:hidden;text-overflow:ellipsis}
+  .item .arrow{font-size:20px;transition:transform .15s var(--ease)}
+  .item:active{transform:scale(.985)}
+  @media (hover:hover){.item:hover{transform:translate(-3px,-3px);box-shadow:5px 5px 0 var(--ink)}.item:hover .arrow{transform:translateX(4px)}}
+  .tag{display:inline-block;padding:2px 8px;background:var(--ink);color:#fff;letter-spacing:.08em;text-transform:uppercase;font-size:11px;margin-right:6px}
+  .tag.line{background:#fff;color:var(--ink);border:1px solid var(--ink);padding:1px 7px}
+  .empty{text-align:center;padding:34px 16px}
+  .empty svg{width:56px;height:56px;stroke:var(--ink);fill:none;stroke-width:1.6;margin-bottom:10px}
+  .empty p{margin:6px 0 16px;color:var(--mut)}
+
+  /* skeleton */
+  .skel{height:64px;margin-bottom:10px;border:1px solid var(--soft);background:linear-gradient(90deg,#ececea 0,#f7f7f5 150px,#ececea 300px);background-size:600px 100%;animation:shimmer 1.2s linear infinite}
+
+  /* ---------- component detail ---------- */
+  .qrframe{position:relative;width:min(230px,70%);margin:18px auto 6px;padding:16px;background:#fff;border:1px solid var(--line)}
+  .qrframe::before,.qrframe::after{content:"";position:absolute;width:14px;height:14px;border:3px solid var(--ink)}
+  .qrframe::before{top:-5px;left:-5px;border-right:0;border-bottom:0}
+  .qrframe::after{bottom:-5px;right:-5px;border-left:0;border-top:0}
+  .qr svg{width:100%;height:auto;display:block}
+  .qrcap{text-align:center;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--mut)}
+  .actions{margin-top:16px}
+  .actions select{flex:0 0 auto;width:auto}
+  .tl{position:relative;margin-top:6px;padding-left:18px}
+  .tl::before{content:"";position:absolute;left:5px;top:6px;bottom:6px;width:2px;background:var(--ink)}
+  .rec{position:relative;padding:10px 12px;margin:0 0 12px;background:#fafafa;border:1px solid var(--soft)}
+  .rec::before{content:"";position:absolute;left:-17px;top:16px;width:10px;height:10px;background:var(--ink);border:2px solid #fff;box-sizing:content-box;margin-left:-1px}
+  .rec.flash{animation:flash 1.4s var(--ease)}
+  .rec .meta{display:block;margin:4px 0 6px}
+
+  /* ---------- labels page ---------- */
+  .labels{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
+  .label{border:1px dashed #888;padding:10px;text-align:center;background:#fff;break-inside:avoid}
   .label .q{width:130px;height:130px;margin:0 auto}
   .label .q svg{width:100%;height:100%}
-  .label div.n{font-weight:600;font-size:13px;margin-top:4px;word-break:break-word}
+  .label div.n{font-weight:700;font-size:13px;margin-top:4px;word-break:break-word}
+
+  /* ---------- bottom tab bar ---------- */
+  #tabs{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:min(100%,760px);display:flex;background:#fff;border-top:1px solid var(--line);z-index:30;padding-bottom:env(safe-area-inset-bottom)}
+  #tabs a{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:10px 4px 9px;color:var(--mut);text-decoration:none;font-size:10px;letter-spacing:.12em;text-transform:uppercase;position:relative;transition:color .15s}
+  #tabs a svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:square;transition:transform .2s var(--ease)}
+  #tabs a::before{content:"";position:absolute;top:-1px;left:50%;width:0;height:3px;background:var(--ink);transform:translateX(-50%);transition:width .25s var(--ease)}
+  #tabs a.on{color:var(--ink)}
+  #tabs a.on::before{width:60%}
+  #tabs a.on svg{transform:translateY(-1px) scale(1.08)}
+  #tabs a:active svg{transform:scale(.88)}
+
+  /* ---------- toasts ---------- */
+  #toasts{position:fixed;left:0;right:0;bottom:calc(84px + env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;gap:8px;z-index:50;pointer-events:none;padding:0 14px}
+  .toast{background:var(--ink);color:#fff;padding:12px 18px;font-size:14px;letter-spacing:.02em;max-width:420px;animation:toastin .28s var(--ease) both;box-shadow:4px 4px 0 rgba(0,0,0,.25)}
+  .toast.bad{background:var(--bad)}
+  .toast.out{opacity:0;transform:translateY(8px);transition:all .25s var(--ease)}
+
   .hide{display:none!important}
+
+  /* ---------- sticker printing ---------- */
   .sticker-only{display:none}
   .sticker{width:var(--sw,1.5in);text-align:center;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;color:#000;background:#fff}
   .sticker svg{width:100%;height:auto;display:block}
@@ -60,20 +158,35 @@
   @media print{
     body.print-sticker main>*:not(.sticker-only){display:none!important}
     body.print-sticker .sticker-only{display:block!important}
-    header,.noprint{display:none!important}
+    header,.noprint,#tabs,#toasts{display:none!important}
     body{background:#fff}
-    main{max-width:none;padding:0}
+    main{max-width:none;padding:0!important}
     .card{border:0;padding:0}
+    #app>*{animation:none}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation-duration:.001ms!important;animation-delay:0s!important;transition-duration:.001ms!important}
   }
 </style>
 </head>
 <body>
 <header class="noprint">
-  <h1>Geminus</h1>
-  <select id="wsSelect" class="hide"></select>
+  <a class="brand" href="#/" aria-label="Geminus Assets home">
+    <svg viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><rect x="2" y="2" width="8" height="8"/><rect x="14" y="2" width="8" height="8"/><rect x="2" y="14" width="8" height="8"/><rect x="14" y="14" width="3" height="3"/><rect x="19" y="19" width="3" height="3"/></svg>
+    <h1>Geminus</h1>
+  </a>
+  <select id="wsSelect" class="hide" aria-label="Workspace"></select>
   <button id="signOutBtn" class="sec sm hide">Sign out</button>
 </header>
 <main id="app"></main>
+
+<nav id="tabs" class="noprint hide" aria-label="Main">
+  <a href="#/"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>Assets</a>
+  <a href="#/new"><svg viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></svg>New</a>
+  <a href="#/labels"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM18 14h2M14 18h2"/></svg>Labels</a>
+  <a href="#/team"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.5"/><path d="M17 14c2.5 0 4 2 4 5"/></svg>Team</a>
+</nav>
+<div id="toasts" class="noprint" aria-live="polite"></div>
 
 <script>
 // ====== CONFIG: paste your Supabase project values here ======
@@ -85,8 +198,9 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const app = document.getElementById('app');
 const wsSelect = document.getElementById('wsSelect');
 const signOutBtn = document.getElementById('signOutBtn');
+const tabs = document.getElementById('tabs');
 
-const S = { user: null, workspaces: [], ws: null, members: {}, components: [] };
+const S = { user: null, workspaces: [], ws: null, members: {}, components: [], flash: false };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = d => new Date(d).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
@@ -99,11 +213,49 @@ function qrSvg(text, cell = 4) {
   const q = qrcode(0, 'M'); q.addData(text); q.make();
   return q.createSvgTag({ cellSize: cell, margin: 2, scalable: true });
 }
-function setErr(msg) { const e = document.getElementById('err'); if (e) e.textContent = msg || ''; }
+
+// ---------- UX helpers ----------
+function friendlyErr(m) {
+  m = String(m || '');
+  if (/failed to fetch|networkerror|load failed/i.test(m)) return "Can't reach the server. Check your connection and try again.";
+  if (/invalid login/i.test(m)) return 'Wrong email or password.';
+  if (/already registered/i.test(m)) return 'That email already has an account. Try signing in.';
+  if (/invalid join code/i.test(m)) return "That join code isn't valid. Check it and try again.";
+  if (/rate limit/i.test(m)) return 'Too many attempts. Wait a few minutes and try again.';
+  return m;
+}
+function setErr(msg, id = 'err') { const e = document.getElementById(id); if (e) e.textContent = msg ? friendlyErr(msg) : ''; }
+function toast(msg, bad = false) {
+  const el = document.createElement('div');
+  el.className = 'toast' + (bad ? ' bad' : '');
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  try { navigator.vibrate && navigator.vibrate(bad ? [30, 40, 30] : 15); } catch {}
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 260); }, 2400);
+}
+async function busy(btn, fn) {
+  if (btn.disabled) return;
+  btn.disabled = true; btn.classList.add('loading');
+  try { return await fn(); }
+  finally { if (btn.isConnected) { btn.disabled = false; btn.classList.remove('loading'); } }
+}
+function skeleton(n = 4) { return '<div>' + '<div class="skel"></div>'.repeat(n) + '</div>'; }
+function onEnter(inputId, btnId) {
+  const i = document.getElementById(inputId);
+  if (i) i.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById(btnId).click(); });
+}
+function updateTabs() {
+  const show = !!(S.user && S.ws);
+  tabs.classList.toggle('hide', !show);
+  document.body.classList.toggle('has-tabs', show);
+  const h = (location.hash && location.hash !== '#') ? location.hash : '#/';
+  tabs.querySelectorAll('a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === h));
+}
 
 // ---------- Routing ----------
-window.addEventListener('hashchange', route);
+window.addEventListener('hashchange', () => { window.scrollTo(0, 0); route(); });
 async function route() {
+  updateTabs();
   if (!S.user) return renderAuth();
   const h = location.hash;
   let m;
@@ -120,22 +272,30 @@ function renderAuth(mode = 'in') {
   signOutBtn.classList.add('hide'); wsSelect.classList.add('hide');
   app.innerHTML = `
     <div class="card">
-      <h2>Geminus Assets</h2>
+      <h2 class="big">Geminus Assets</h2>
       <div class="tagline">Physical form. Digital mind.</div>
       <b>${mode === 'in' ? 'Sign in' : 'Create account'}</b>
-      <label>Email</label><input id="em" type="email" autocomplete="email">
-      <label>Password</label><input id="pw" type="password" autocomplete="${mode === 'in' ? 'current-password' : 'new-password'}">
+      <label for="em">Email</label><input id="em" type="email" autocomplete="email" inputmode="email" autocapitalize="off">
+      <label for="pw">Password</label>
+      <div class="pwwrap"><input id="pw" type="password" autocomplete="${mode === 'in' ? 'current-password' : 'new-password'}">
+        <button type="button" class="sec" id="showpw">Show</button></div>
       <div class="err" id="err"></div>
-      <div class="row" style="margin-top:8px">
+      <div class="row" style="margin-top:6px">
         <button id="go">${mode === 'in' ? 'Sign in' : 'Sign up'}</button>
         <button class="sec" id="sw">${mode === 'in' ? 'Need an account?' : 'Have an account?'}</button>
       </div>
     </div>`;
   document.getElementById('sw').onclick = () => renderAuth(mode === 'in' ? 'up' : 'in');
-  document.getElementById('go').onclick = async () => {
+  document.getElementById('showpw').onclick = e => {
+    const i = document.getElementById('pw'); const show = i.type === 'password';
+    i.type = show ? 'text' : 'password'; e.target.textContent = show ? 'Hide' : 'Show';
+  };
+  onEnter('pw', 'go'); onEnter('em', 'go');
+  document.getElementById('go').onclick = ev => busy(ev.currentTarget, async () => {
     const email = document.getElementById('em').value.trim();
     const password = document.getElementById('pw').value;
     setErr('');
+    if (!email || !password) return setErr('Enter your email and password.');
     if (mode === 'in') {
       const { error } = await sb.auth.signInWithPassword({ email, password });
       if (error) return setErr(error.message);
@@ -145,7 +305,7 @@ function renderAuth(mode = 'in') {
       if (!data.session) return app.querySelector('.card').innerHTML =
         '<h2>Check your email</h2><p>Confirm your address, then come back and sign in.</p>';
     }
-  };
+  });
 }
 
 sb.auth.onAuthStateChange(async (_evt, session) => {
@@ -169,9 +329,10 @@ async function loadWorkspaces() {
     + '<option value="__new">+ New / join…</option>';
   if (S.ws) wsSelect.value = S.ws.id;
   if (S.ws) await loadMembers();
+  updateTabs();
 }
 wsSelect.onchange = async () => {
-  if (wsSelect.value === '__new') { S.workspaces.length && (S.ws = null); return renderWorkspaceSetup(true); }
+  if (wsSelect.value === '__new') { S.workspaces.length && (S.ws = null); updateTabs(); return renderWorkspaceSetup(true); }
   S.ws = S.workspaces.find(w => w.id === wsSelect.value);
   lastWs.set(S.ws.id); await loadMembers(); location.hash = '#/'; route();
 };
@@ -183,66 +344,81 @@ function renderWorkspaceSetup(canCancel) {
   app.innerHTML = `
     <div class="card"><h2>Create a workspace</h2>
       <p class="mut">A workspace is one team (e.g. your employer). Everyone in it shares components and records.</p>
-      <label>Workspace name</label><input id="wname" placeholder="e.g. Hotel Maintenance">
+      <label for="wname">Workspace name</label><input id="wname" placeholder="e.g. Hotel Maintenance">
       <div class="err" id="err"></div>
-      <button id="mk" style="margin-top:8px">Create</button></div>
+      <button id="mk">Create</button></div>
     <div class="card"><h2>Or join one</h2>
-      <label>Join code (from a teammate)</label><input id="jc">
+      <label for="jc">Join code (from a teammate)</label><input id="jc" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false">
       <div class="err" id="err2"></div>
-      <button id="jn" style="margin-top:8px">Join</button></div>
+      <button id="jn">Join</button></div>
     ${canCancel ? '<button class="sec" id="cx">Cancel</button>' : ''}`;
   const finish = async id => { lastWs.set(id); await loadWorkspaces(); location.hash = '#/'; route(); };
-  document.getElementById('mk').onclick = async () => {
+  onEnter('wname', 'mk'); onEnter('jc', 'jn');
+  document.getElementById('mk').onclick = ev => busy(ev.currentTarget, async () => {
     const name = document.getElementById('wname').value.trim(); if (!name) return setErr('Enter a name');
     const { data, error } = await sb.rpc('create_workspace', { p_name: name });
-    if (error) return setErr(error.message); finish(data);
-  };
-  document.getElementById('jn').onclick = async () => {
-    const code = document.getElementById('jc').value.trim(); if (!code) return;
+    if (error) return setErr(error.message);
+    toast('Workspace created'); await finish(data);
+  });
+  document.getElementById('jn').onclick = ev => busy(ev.currentTarget, async () => {
+    const code = document.getElementById('jc').value.trim(); if (!code) return setErr('Enter the join code', 'err2');
     const { data, error } = await sb.rpc('join_workspace', { p_code: code });
-    if (error) return document.getElementById('err2').textContent = error.message; finish(data);
-  };
+    if (error) return setErr(error.message, 'err2');
+    toast('Joined workspace'); await finish(data);
+  });
   const cx = document.getElementById('cx');
   if (cx) cx.onclick = async () => { await loadWorkspaces(); route(); };
 }
 
-// ---------- Nav ----------
-function nav(active) {
-  const t = (h, l) => `<a href="${h}" style="margin-right:14px;color:${active === h ? 'var(--acc)' : 'var(--ink)'};font-weight:${active === h ? 600 : 400}">${l}</a>`;
-  return `<div class="noprint" style="margin-bottom:12px">${t('#/', 'Components')}${t('#/new', '+ New')}${t('#/labels', 'Labels')}${t('#/team', 'Team')}</div>`;
-}
-
 // ---------- Component list ----------
 async function renderList() {
-  app.innerHTML = nav('#/') + '<div class="mut">Loading…</div>';
+  app.innerHTML = `<div class="pagehead"><h2>Assets</h2></div>` + skeleton(4);
   const { data, error } = await sb.from('components').select('*').eq('workspace_id', S.ws.id).order('name');
-  if (error) return app.innerHTML = `<div class="err">${esc(error.message)}</div>`;
+  if (error) { app.innerHTML = `<div class="card"><div class="err">${esc(friendlyErr(error.message))}</div></div>`; return; }
   S.components = data;
-  app.innerHTML = nav('#/') + `
-    <input id="q" placeholder="Search components…" style="margin-bottom:10px">
+  if (!data.length) {
+    app.innerHTML = `
+      <div class="pagehead"><h2>Assets</h2></div>
+      <div class="card empty">
+        <svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM18 14h2M14 18h2"/></svg>
+        <h2>No components yet</h2>
+        <p>Add your first piece of equipment, then print its QR sticker.</p>
+        <button onclick="location.hash='#/new'">Add component</button>
+      </div>`;
+    return;
+  }
+  app.innerHTML = `
+    <div class="pagehead"><h2>Assets</h2><span class="count" id="cnt"></span></div>
+    <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+      <input id="q" type="search" placeholder="Search components…" autocomplete="off"></div>
     <div id="list"></div>`;
   const draw = () => {
     const q = document.getElementById('q').value.toLowerCase();
     const rows = S.components.filter(c => [c.name, c.category, c.location].join(' ').toLowerCase().includes(q));
-    document.getElementById('list').innerHTML = rows.length ? rows.map(c => `
-      <a class="item" href="#/c/${c.id}"><b>${esc(c.name)}</b>
-        <span class="mut">${c.category ? `<span class="tag">${esc(c.category)}</span>` : ''}${esc(c.location || '')}</span></a>`).join('')
-      : '<div class="card mut">No components yet. Tap “+ New” to add one.</div>';
+    document.getElementById('cnt').textContent = rows.length + (rows.length === 1 ? ' component' : ' components');
+    document.getElementById('list').innerHTML = rows.length ? rows.map((c, i) => `
+      <a class="item" href="#/c/${c.id}" style="animation-delay:${Math.min(i, 8) * 40}ms">
+        <div class="t"><b>${esc(c.name)}</b>
+          <span class="mut">${c.category ? `<span class="tag">${esc(c.category)}</span>` : ''}${esc(c.location || '')}</span></div>
+        <span class="arrow">→</span></a>`).join('')
+      : '<div class="card mut" style="text-align:center">Nothing matches that search.</div>';
   };
   document.getElementById('q').oninput = draw; draw();
 }
 
 // ---------- New component ----------
 function renderNew() {
-  app.innerHTML = nav('#/new') + `
-    <div class="card"><h2>New component</h2>
-      <label>Name *</label><input id="n" placeholder="e.g. Rooftop AC Unit 2">
-      <label>Category</label><input id="cat" placeholder="e.g. HVAC, Plumbing, Electrical">
-      <label>Location</label><input id="loc" placeholder="e.g. Roof, Boiler room">
-      <label>Notes</label><textarea id="nt" placeholder="Model, serial number, anything useful"></textarea>
+  app.innerHTML = `
+    <div class="pagehead"><h2>New component</h2></div>
+    <div class="card">
+      <label for="n">Name *</label><input id="n" placeholder="e.g. Rooftop AC Unit 2" autocomplete="off">
+      <label for="cat">Category</label><input id="cat" placeholder="e.g. HVAC, Plumbing, Electrical" autocomplete="off">
+      <label for="loc">Location</label><input id="loc" placeholder="e.g. Roof, Boiler room" autocomplete="off">
+      <label for="nt">Notes</label><textarea id="nt" placeholder="Model, serial number, anything useful"></textarea>
       <div class="err" id="err"></div>
-      <button id="save" style="margin-top:8px">Save</button></div>`;
-  document.getElementById('save').onclick = async () => {
+      <button id="save">Save component</button></div>`;
+  document.getElementById('n').focus({ preventScroll: true });
+  document.getElementById('save').onclick = ev => busy(ev.currentTarget, async () => {
     const name = document.getElementById('n').value.trim(); if (!name) return setErr('Name is required');
     const { data, error } = await sb.from('components').insert({
       workspace_id: S.ws.id, name,
@@ -251,13 +427,15 @@ function renderNew() {
       notes: document.getElementById('nt').value.trim() || null
     }).select().single();
     if (error) return setErr(error.message);
+    toast('Component created');
     location.hash = '#/c/' + data.id;
-  };
+  });
 }
 
 // ---------- Component detail ----------
+const REC_TYPES = ['Service', 'Inspection', 'Repair', 'Replacement', 'Cleaning', 'Other'];
 async function renderComponent(id, afterJoin = false) {
-  app.innerHTML = '<div class="mut">Loading…</div>';
+  app.innerHTML = skeleton(3);
   const { data: c, error } = await sb.from('components').select('*').eq('id', id).maybeSingle();
   if (error || !c) return renderJoinPrompt(id, afterJoin ? 'That join code is for a different workspace than this component.' : '');
   // switch workspace automatically if the scanned QR belongs to another one
@@ -265,41 +443,50 @@ async function renderComponent(id, afterJoin = false) {
     S.ws = S.workspaces.find(w => w.id === c.workspace_id) || S.ws;
     wsSelect.value = S.ws.id; lastWs.set(S.ws.id); await loadMembers();
   }
+  updateTabs();
   const { data: recs } = await sb.from('records').select('*').eq('component_id', id).order('performed_at', { ascending: false });
   const isOwner = S.members[S.user.id]?.role === 'owner';
-  app.innerHTML = nav('') + `
+  let recType = 'Service';
+  app.innerHTML = `
     <div class="card">
-      <h2>${esc(c.name)}</h2>
+      <h2 class="big">${esc(c.name)}</h2>
       <div class="mut">${c.category ? `<span class="tag">${esc(c.category)}</span>` : ''}${esc(c.location || '')}</div>
       ${c.notes ? `<p>${esc(c.notes).replace(/\n/g, '<br>')}</p>` : ''}
-      <div class="qr" style="margin-top:12px">${qrSvg(compUrl(c.id))}</div>
-      <div class="row noprint" style="margin-top:10px;justify-content:center">
-        <select id="ssize" style="flex:0 0 auto;width:auto;padding:6px">
+      <div class="qrframe"><div class="qr">${qrSvg(compUrl(c.id))}</div></div>
+      <div class="qrcap">Scan to log maintenance</div>
+      <div class="row actions noprint">
+        <select id="ssize" aria-label="Sticker size">
           <option value="1in">Sticker 1 in</option>
           <option value="1.5in" selected>Sticker 1.5 in</option>
           <option value="2in">Sticker 2 in</option>
         </select>
-        <button class="sm" id="psticker">Print sticker</button>
-        <button class="sec sm" onclick="window.print()">Print full page</button>
-        <button class="sec sm" id="edit">Edit</button>
-        ${isOwner ? '<button class="bad sm" id="del">Delete</button>' : ''}
+        <button id="psticker">Print sticker</button>
+        <button class="sec" onclick="window.print()">Full page</button>
+        <button class="sec" id="edit">Edit</button>
+        ${isOwner ? '<button class="bad" id="del">Delete</button>' : ''}
       </div>
     </div>
     <div class="card noprint">
       <h2>Log maintenance</h2>
       <label>Type</label>
-      <select id="rt"><option>Service</option><option>Inspection</option><option>Repair</option><option>Replacement</option><option>Cleaning</option><option>Other</option></select>
-      <label>What was done *</label><textarea id="rd"></textarea>
+      <div class="chips" id="chips">${REC_TYPES.map(t => `<button type="button" class="chip" aria-pressed="${t === 'Service'}" data-t="${t}">${t}</button>`).join('')}</div>
+      <label for="rd">What was done *</label><textarea id="rd" placeholder="Describe the work, parts used, readings…"></textarea>
       <div class="err" id="err"></div>
-      <button id="addrec" style="margin-top:8px">Add record</button>
+      <button id="addrec">Add record</button>
     </div>
     <div class="card"><h2>History (${(recs || []).length})</h2>
+      <div class="tl">
       ${(recs || []).map(r => `
-        <div class="rec"><span class="tag">${esc(r.type)}</span><span class="mut">${fmt(r.performed_at)} · ${esc(S.members[r.performed_by]?.display_name || 'unknown')}</span>
+        <div class="rec"><span class="tag">${esc(r.type)}</span>
+          <span class="mut meta">${fmt(r.performed_at)} · ${esc(S.members[r.performed_by]?.display_name || 'unknown')}</span>
           <div>${esc(r.description).replace(/\n/g, '<br>')}</div>
-          ${(r.performed_by === S.user.id || isOwner) ? `<button class="sec sm noprint" data-del="${r.id}" style="margin-top:6px">Delete</button>` : ''}
-        </div>`).join('') || '<div class="mut">No records yet.</div>'}
+          ${(r.performed_by === S.user.id || isOwner) ? `<button class="sec sm noprint" data-del="${r.id}" style="margin-top:8px">Delete</button>` : ''}
+        </div>`).join('') || '<div class="mut">No records yet. Log the first one above.</div>'}
+      </div>
     </div>`;
+  if (S.flash) { app.querySelector('.rec')?.classList.add('flash'); S.flash = false; }
+
+  // sticker print block
   const st = document.createElement('div');
   st.className = 'sticker-only';
   st.innerHTML = `<div class="sticker">${qrSvg(compUrl(c.id))}<div class="sn">${esc(c.name)}</div>${c.location ? `<div class="sl">${esc(c.location)}</div>` : ''}</div>`;
@@ -309,40 +496,56 @@ async function renderComponent(id, afterJoin = false) {
     document.body.classList.add('print-sticker');
     window.print();
   };
-  document.getElementById('addrec').onclick = async () => {
+
+  document.getElementById('chips').addEventListener('click', e => {
+    const b = e.target.closest('.chip'); if (!b) return;
+    recType = b.dataset.t;
+    document.querySelectorAll('#chips .chip').forEach(x => x.setAttribute('aria-pressed', x === b));
+  });
+  document.getElementById('addrec').onclick = ev => busy(ev.currentTarget, async () => {
     const description = document.getElementById('rd').value.trim(); if (!description) return setErr('Describe what was done');
     const { error } = await sb.from('records').insert({
-      component_id: c.id, workspace_id: c.workspace_id, type: document.getElementById('rt').value, description });
-    if (error) return setErr(error.message); renderComponent(id);
-  };
-  app.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+      component_id: c.id, workspace_id: c.workspace_id, type: recType, description });
+    if (error) return setErr(error.message);
+    S.flash = true; toast('Record added'); renderComponent(id);
+  });
+  app.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
     if (!confirm('Delete this record?')) return;
-    await sb.from('records').delete().eq('id', b.dataset.del); renderComponent(id);
+    busy(b, async () => {
+      const { error } = await sb.from('records').delete().eq('id', b.dataset.del);
+      if (error) return toast(friendlyErr(error.message), true);
+      toast('Record deleted'); renderComponent(id);
+    });
   });
   document.getElementById('edit').onclick = () => renderEdit(c);
   const del = document.getElementById('del');
-  if (del) del.onclick = async () => {
+  if (del) del.onclick = () => {
     if (!confirm('Delete this component and ALL its records?')) return;
-    const { error } = await sb.from('components').delete().eq('id', c.id);
-    if (error) return alert(error.message); location.hash = '#/';
+    busy(del, async () => {
+      const { error } = await sb.from('components').delete().eq('id', c.id);
+      if (error) return toast(friendlyErr(error.message), true);
+      toast('Component deleted'); location.hash = '#/';
+    });
   };
 }
+
 function renderJoinPrompt(id, msg) {
   app.innerHTML = `
     <div class="card">
       <h2>You are not part of this workspace</h2>
       <p>Please enter the join code to join this workspace and open this component.</p>
       <p class="mut">Ask a teammate for the code. If this component was deleted, the code won't help.</p>
-      <label>Join code</label>
+      <label for="jc">Join code</label>
       <input id="jc" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false">
       <div class="err" id="err">${esc(msg)}</div>
-      <div class="row" style="margin-top:8px">
+      <div class="row">
         <button id="jn">Join workspace</button>
         <button class="sec" id="home">Back</button>
       </div>
     </div>`;
+  onEnter('jc', 'jn');
   document.getElementById('home').onclick = () => { location.hash = '#/'; };
-  document.getElementById('jn').onclick = async () => {
+  document.getElementById('jn').onclick = ev => busy(ev.currentTarget, async () => {
     const code = document.getElementById('jc').value.trim();
     if (!code) return setErr('Enter the join code');
     setErr('');
@@ -350,57 +553,69 @@ function renderJoinPrompt(id, msg) {
     if (error) return setErr(error.message);
     await loadWorkspaces();
     renderComponent(id, true);
-  };
+  });
 }
 
 function renderEdit(c) {
-  app.innerHTML = nav('') + `
-    <div class="card"><h2>Edit component</h2>
-      <label>Name *</label><input id="n" value="${esc(c.name)}">
-      <label>Category</label><input id="cat" value="${esc(c.category || '')}">
-      <label>Location</label><input id="loc" value="${esc(c.location || '')}">
-      <label>Notes</label><textarea id="nt">${esc(c.notes || '')}</textarea>
+  app.innerHTML = `
+    <div class="pagehead"><h2>Edit component</h2></div>
+    <div class="card">
+      <label for="n">Name *</label><input id="n" value="${esc(c.name)}">
+      <label for="cat">Category</label><input id="cat" value="${esc(c.category || '')}">
+      <label for="loc">Location</label><input id="loc" value="${esc(c.location || '')}">
+      <label for="nt">Notes</label><textarea id="nt">${esc(c.notes || '')}</textarea>
       <div class="err" id="err"></div>
-      <div class="row" style="margin-top:8px"><button id="save">Save</button><button class="sec" id="cx">Cancel</button></div></div>`;
+      <div class="row"><button id="save">Save</button><button class="sec" id="cx">Cancel</button></div></div>`;
   document.getElementById('cx').onclick = () => renderComponent(c.id);
-  document.getElementById('save').onclick = async () => {
+  document.getElementById('save').onclick = ev => busy(ev.currentTarget, async () => {
     const name = document.getElementById('n').value.trim(); if (!name) return setErr('Name is required');
     const { error } = await sb.from('components').update({
       name, category: document.getElementById('cat').value.trim() || null,
       location: document.getElementById('loc').value.trim() || null,
       notes: document.getElementById('nt').value.trim() || null }).eq('id', c.id);
-    if (error) return setErr(error.message); renderComponent(c.id);
-  };
+    if (error) return setErr(error.message);
+    toast('Saved'); renderComponent(c.id);
+  });
 }
 
 // ---------- Print all labels ----------
 async function renderLabels() {
+  app.innerHTML = `<div class="pagehead"><h2>Labels</h2></div>` + skeleton(3);
   const { data } = await sb.from('components').select('id,name,location').eq('workspace_id', S.ws.id).order('name');
-  app.innerHTML = nav('#/labels') + `
-    <div class="noprint row" style="margin-bottom:10px"><div class="mut">QR labels for every component in this workspace.</div>
-      <button onclick="window.print()">Print</button></div>
-    <div class="labels">${(data || []).map(c => `
-      <div class="label"><div class="q">${qrSvg(compUrl(c.id))}</div>
-        <div class="n">${esc(c.name)}</div><div class="mut">${esc(c.location || '')}</div></div>`).join('')}</div>`;
+  app.innerHTML = `
+    <div class="pagehead noprint"><h2>Labels</h2><button class="sm" onclick="window.print()">Print all</button></div>
+    ${(data || []).length ? `<div class="labels">${data.map((c, i) => `
+      <div class="label" style="animation:rise .32s var(--ease) ${Math.min(i, 10) * 35}ms both"><div class="q">${qrSvg(compUrl(c.id))}</div>
+        <div class="n">${esc(c.name)}</div><div class="mut">${esc(c.location || '')}</div></div>`).join('')}</div>`
+      : '<div class="card mut" style="text-align:center">No components yet. Add one first.</div>'}`;
 }
 
 // ---------- Team ----------
 function renderTeam() {
   const isOwner = S.members[S.user.id]?.role === 'owner';
-  app.innerHTML = nav('#/team') + `
-    <div class="card"><h2>${esc(S.ws.name)}</h2>
-      <label>Join code (share with teammates)</label>
-      <input readonly value="${esc(S.ws.join_code)}" onclick="this.select()">
+  app.innerHTML = `
+    <div class="pagehead"><h2>Team</h2><span class="count">${esc(S.ws.name)}</span></div>
+    <div class="card">
+      <h2>Join code</h2>
+      <p class="mut">Share this with teammates so they can join this workspace.</p>
+      <div class="row"><input readonly id="jcode" value="${esc(S.ws.join_code)}" onclick="this.select()" style="font-family:monospace;letter-spacing:.1em">
+        <button id="copy">Copy</button></div>
     </div>
-    <div class="card"><h2>Members</h2>
+    <div class="card"><h2>Members (${Object.keys(S.members).length})</h2>
       ${Object.entries(S.members).map(([uid, m]) => `
-        <div class="row" style="padding:6px 0"><div>${esc(m.display_name || 'user')} <span class="tag">${m.role}</span></div>
+        <div class="row" style="padding:8px 0;border-top:1px solid var(--soft)"><div>${esc(m.display_name || 'user')} <span class="tag ${m.role === 'owner' ? '' : 'line'}">${m.role}</span></div>
         ${(isOwner && uid !== S.user.id) ? `<button class="sec sm" data-rm="${uid}">Remove</button>` : ''}</div>`).join('')}
     </div>`;
-  app.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
+  document.getElementById('copy').onclick = async () => {
+    try { await navigator.clipboard.writeText(S.ws.join_code); toast('Join code copied'); }
+    catch { document.getElementById('jcode').select(); toast('Select and copy the code'); }
+  };
+  app.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => {
     if (!confirm('Remove this member?')) return;
-    await sb.from('workspace_members').delete().eq('workspace_id', S.ws.id).eq('user_id', b.dataset.rm);
-    await loadMembers(); renderTeam();
+    busy(b, async () => {
+      await sb.from('workspace_members').delete().eq('workspace_id', S.ws.id).eq('user_id', b.dataset.rm);
+      toast('Member removed'); await loadMembers(); renderTeam();
+    });
   });
 }
 
