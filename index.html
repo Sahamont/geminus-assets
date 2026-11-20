@@ -132,6 +132,7 @@
   .label .q{width:130px;height:130px;margin:0 auto}
   .label .q svg{width:100%;height:100%}
   .label div.n{font-weight:700;font-size:13px;margin-top:4px;word-break:break-word}
+  .label .tg{font-family:var(--display);font-size:20px;letter-spacing:.03em;margin-top:6px;line-height:1}
 
   /* ---------- bottom tab bar ---------- */
   #tabs{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:min(100%,760px);display:flex;background:#fff;border-top:1px solid var(--line);z-index:30;padding-bottom:env(safe-area-inset-bottom)}
@@ -178,7 +179,8 @@
   .sticker-only{display:none}
   .sticker{width:var(--sw,1.5in);text-align:center;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;color:#000;background:#fff}
   .sticker svg{width:100%;height:auto;display:block}
-  .sticker .sn{font-weight:700;font-size:calc(var(--sw,1.5in)*0.09);line-height:1.1;margin-top:2px;word-break:break-word}
+  .sticker .st{font-family:"Archivo Black",Impact,"Arial Black",sans-serif;font-size:calc(var(--sw,1.5in)*0.14);letter-spacing:.02em;line-height:1;margin-top:3px}
+  .sticker .sn{font-weight:700;font-size:calc(var(--sw,1.5in)*0.08);line-height:1.1;margin-top:2px;word-break:break-word}
   .sticker .sl{font-size:calc(var(--sw,1.5in)*0.07);line-height:1.1}
   @page{margin:0.15in}
   @media print{
@@ -249,6 +251,9 @@ function friendlyErr(m) {
   if (/invalid login/i.test(m)) return 'Wrong email or password.';
   if (/already registered/i.test(m)) return 'That email already has an account. Try signing in.';
   if (/invalid join code/i.test(m)) return "That join code isn't valid. Check it and try again.";
+  if (/types_prefix_uniq/i.test(m)) return 'That prefix is already used by another type.';
+  if (/components_tag_uniq/i.test(m)) return 'That asset tag already exists. Try again.';
+  if (/allocate_tags|column .*(tag|prefix|next_number)/i.test(m)) return 'One database step is missing: run tags.sql in Supabase, then try again.';
   if (/set_display_name|could not find the function/i.test(m)) return 'One database step is missing: run profile.sql in Supabase, then try again.';
   if (/rate limit/i.test(m)) return 'Too many attempts. Wait a few minutes and try again.';
   return m;
@@ -393,6 +398,7 @@ async function route() {
   let m;
   if ((m = h.match(/^#\/c\/([0-9a-f-]{36})$/i))) return renderComponent(m[1]);
   if (h === '#/profile') return renderProfile();
+  if (h === '#/batch') return renderBatch();
   if (!S.workspaces.length) return renderWorkspaceSetup();
   if (h === '#/new') return renderNew();
   if (h === '#/labels') return renderLabels();
@@ -540,7 +546,7 @@ async function renderList() {
       if (locSet && !locSet.has(c.location_id)) return false;
       const tn = c.type_id ? typeById(c.type_id)?.name : c.category;
       const lp = c.location_id ? locPath(c.location_id) : c.location;
-      return [c.name, tn, lp].join(' ').toLowerCase().includes(q);
+      return [c.name, c.tag, tn, lp].join(' ').toLowerCase().includes(q);
     });
     document.getElementById('cnt').textContent = rows.length + (rows.length === 1 ? ' component' : ' components');
     document.getElementById('list').innerHTML = rows.length ? rows.map((c, i) => {
@@ -549,7 +555,7 @@ async function renderList() {
       return `
       <a class="item" href="#/c/${c.id}" style="animation-delay:${Math.min(i, 8) * 40}ms">
         <div class="t"><b>${esc(c.name)}</b>
-          <span class="mut">${tn ? `<span class="tag">${esc(tn)}</span>` : ''}${esc(lp)}</span></div>
+          <span class="mut">${c.tag ? `<span class="tag line" style="font-weight:700">${esc(c.tag)}</span>` : ''}${tn ? `<span class="tag">${esc(tn)}</span>` : ''}${esc(lp)}</span></div>
         <span class="arrow">→</span></a>`;
     }).join('') : '<div class="card mut" style="text-align:center">Nothing matches.</div>';
   };
@@ -571,7 +577,8 @@ function renderComponentForm(c) {
     <div class="pagehead"><h2>${editing ? 'Edit component' : 'New component'}</h2></div>
     ${migrationBanner()}
     <div class="card">
-      <label for="n">Name *</label><input id="n" value="${esc(c?.name || '')}" placeholder="e.g. Rooftop AC Unit 2" autocomplete="off">
+      ${editing && c.tag ? `<p class="mut" style="margin:0 0 4px">Asset tag: <b>${esc(c.tag)}</b></p>` : ''}
+      <label for="n" id="nlabel">Name *</label><input id="n" value="${esc(c?.name || '')}" placeholder="e.g. Rooftop AC Unit 2" autocomplete="off">
 
       <label for="ty">Type</label>
       <div class="row"><select id="ty">${typeOptions(typeId)}</select><button type="button" class="sec sm" id="addty">+ Type</button></div>
@@ -583,6 +590,10 @@ function renderComponentForm(c) {
       <label for="lo">Location</label>
       <div class="row"><select id="lo">${locOptions(locId)}</select><button type="button" class="sec sm" id="addlo">+ Location</button></div>
       <div id="qlo"></div>
+
+      ${editing ? '' : `<div id="qtywrap" class="hide"><label for="qn">How many?</label>
+        <input id="qn" type="number" min="1" max="50" value="1" inputmode="numeric">
+        <p class="mut" id="qnhint" style="margin:6px 0 0"></p></div>`}
 
       <label for="nt">Notes</label><textarea id="nt" placeholder="Model, serial number, anything useful">${esc(c?.notes || '')}</textarea>
       <div class="err" id="err"></div>
@@ -606,8 +617,22 @@ function renderComponentForm(c) {
     const b = $('addfield');
     if (b) b.onclick = () => openFieldForm($('afhost'), typeId, null, drawCF);
   };
-  drawCF();
-  $('ty').onchange = () => { syncCustom(); typeId = $('ty').value; $('afhost').innerHTML = ''; drawCF(); };
+  // name becomes optional once a type is chosen; "how many" appears for new components
+  const syncHints = () => {
+    const tn = typeId ? typeById(typeId)?.name : '';
+    $('nlabel').textContent = tn && !editing ? 'Name (optional)' : 'Name *';
+    $('n').placeholder = tn && !editing ? `Leave blank to use "${tn} 001"` : 'e.g. Rooftop AC Unit 2';
+    if (!editing) {
+      $('qtywrap').classList.toggle('hide', !typeId);
+      const q = Math.max(1, Math.min(50, parseInt($('qn').value, 10) || 1));
+      $('qnhint').textContent = !typeId ? '' : q > 1
+        ? `Creates ${q} components with numbered tags. You can set each one's room afterwards.`
+        : 'Each component gets its own asset tag and QR code.';
+    }
+  };
+  drawCF(); syncHints();
+  if (!editing) $('qn').oninput = syncHints;
+  $('ty').onchange = () => { syncCustom(); typeId = $('ty').value; $('afhost').innerHTML = ''; drawCF(); syncHints(); };
   $('lo').onchange = () => { locId = $('lo').value; };
 
   $('addty').onclick = () => {
@@ -620,7 +645,7 @@ function renderComponentForm(c) {
       const { data, error } = await sb.from('component_types').insert({ workspace_id: S.ws.id, name }).select().single();
       if (error) return setErr(error.message, 'qterr');
       await loadMeta(); syncCustom(); typeId = data.id;
-      $('ty').innerHTML = typeOptions(typeId); $('qty').innerHTML = ''; toast('Type added'); drawCF();
+      $('ty').innerHTML = typeOptions(typeId); $('qty').innerHTML = ''; toast('Type added'); drawCF(); syncHints();
     });
   };
   $('addlo').onclick = () => {
@@ -641,19 +666,63 @@ function renderComponentForm(c) {
   if (editing) $('cx').onclick = () => renderComponent(c.id);
   else $('n').focus({ preventScroll: true });
   $('save').onclick = ev => busy(ev.currentTarget, async () => {
-    const name = $('n').value.trim(); if (!name) return setErr('Name is required');
+    const name = $('n').value.trim();
+    const typeName = typeId ? (typeById(typeId)?.name || '') : '';
+    if (!name && (editing || !typeName)) return setErr('Name is required');
+    setErr('');
     syncCustom();
-    const row = { name, type_id: typeId || null, location_id: locId || null, custom, notes: $('nt').value.trim() || null };
+    const base = { type_id: typeId || null, location_id: locId || null, custom, notes: $('nt').value.trim() || null };
     if (editing) {
+      const row = { ...base, name };
+      if (!c.tag && typeId) {            // older components get a tag the first time they are saved with a type
+        const { data: tg, error: te } = await sb.rpc('allocate_tags', { p_type_id: typeId, p_count: 1 });
+        if (te) return setErr(te.message);
+        row.tag = tg[0];
+      }
       const { error } = await sb.from('components').update(row).eq('id', c.id);
       if (error) return setErr(error.message);
-      toast('Saved'); renderComponent(c.id);
-    } else {
-      const { data, error } = await sb.from('components').insert({ ...row, workspace_id: S.ws.id }).select().single();
-      if (error) return setErr(error.message);
-      toast('Component created'); location.hash = '#/c/' + data.id;
+      await loadMeta(); toast('Saved'); renderComponent(c.id);
+      return;
     }
+    const qty = typeId ? Math.max(1, Math.min(50, parseInt($('qn').value, 10) || 1)) : 1;
+    let tags = [];
+    if (typeId) {
+      const { data: tg, error: te } = await sb.rpc('allocate_tags', { p_type_id: typeId, p_count: qty });
+      if (te) return setErr(te.message);
+      tags = tg;
+    }
+    const rows = Array.from({ length: qty }, (_, i) => {
+      const tag = tags[i] || null, num = tag ? tag.split('-').pop() : '';
+      const nm = name ? (qty > 1 ? `${name} ${num}` : name) : `${typeName} ${num}`;
+      return { ...base, name: nm, tag, workspace_id: S.ws.id };
+    });
+    const { data, error } = await sb.from('components').insert(rows).select();
+    if (error) return setErr(error.message);
+    await loadMeta();
+    if (data.length === 1) { toast('Component created'); location.hash = '#/c/' + data[0].id; }
+    else { S.batchRows = data; toast(`${data.length} components created`); location.hash = '#/batch'; }
   });
+}
+
+// ---------- Batch result: stickers for what was just created ----------
+function renderBatch() {
+  const rows = (S.batchRows || []).slice().sort((a, b) => String(a.tag).localeCompare(String(b.tag)));
+  if (!rows.length) { location.hash = '#/'; return; }
+  app.innerHTML = `
+    <div class="pagehead noprint"><h2>${rows.length} components created</h2></div>
+    <div class="card noprint">
+      <p>Tags <b>${esc(rows[0].tag || '')}</b> to <b>${esc(rows[rows.length - 1].tag || '')}</b>. Tap a component below to set its room, then print the stickers.</p>
+      <div class="row"><button id="bprint">Print all stickers</button><button class="sec" id="bdone">Go to assets</button></div>
+    </div>
+    <div class="labels">${rows.map(c => `
+      <div class="label"><div class="q">${qrSvg(compUrl(c.id))}</div>
+        ${c.tag ? `<div class="tg">${esc(c.tag)}</div>` : ''}<div class="n">${esc(c.name)}</div>
+        <div class="mut">${esc(c.location_id ? locPath(c.location_id) : '')}</div></div>`).join('')}</div>
+    <div class="card noprint" style="margin-top:14px"><h2>Open one</h2>
+      ${rows.map(c => `<a class="trow linkbtn" href="#/c/${c.id}"><span class="nm"><b>${esc(c.tag || '')}</b> <span class="mut">${esc(c.name)}</span></span><span>→</span></a>`).join('')}
+    </div>`;
+  document.getElementById('bprint').onclick = () => window.print();
+  document.getElementById('bdone').onclick = () => { S.batchRows = null; location.hash = '#/'; };
 }
 
 // ---------- Component detail ----------
@@ -677,7 +746,7 @@ async function renderComponent(id, afterJoin = false) {
   app.innerHTML = `
     <div class="card">
       <h2 class="big">${esc(c.name)}</h2>
-      <div class="mut">${tName ? `<span class="tag">${esc(tName)}</span>` : ''}${esc(lPath)}</div>
+      <div class="mut">${c.tag ? `<span class="tag line" style="font-weight:700">${esc(c.tag)}</span>` : ''}${tName ? `<span class="tag">${esc(tName)}</span>` : ''}${esc(lPath)}</div>
       ${defs.length ? `<div class="kvs">${defs.map(f => `<div class="kv"><span>${esc(f.label)}</span><b>${esc(fmtField(f, c.custom?.[f.id]))}</b></div>`).join('')}</div>` : ''}
       ${c.notes ? `<p>${esc(c.notes).replace(/\n/g, '<br>')}</p>` : ''}
       <div class="qrframe"><div class="qr">${qrSvg(compUrl(c.id))}</div></div>
@@ -717,7 +786,7 @@ async function renderComponent(id, afterJoin = false) {
   // sticker print block
   const st = document.createElement('div');
   st.className = 'sticker-only';
-  st.innerHTML = `<div class="sticker">${qrSvg(compUrl(c.id))}<div class="sn">${esc(c.name)}</div>${lPath ? `<div class="sl">${esc(lPath)}</div>` : ''}</div>`;
+  st.innerHTML = `<div class="sticker">${qrSvg(compUrl(c.id))}${c.tag ? `<div class="st">${esc(c.tag)}</div>` : ''}<div class="sn">${esc(c.name)}</div>${lPath ? `<div class="sl">${esc(lPath)}</div>` : ''}</div>`;
   app.appendChild(st);
   document.getElementById('psticker').onclick = () => {
     st.style.setProperty('--sw', document.getElementById('ssize').value);
@@ -789,12 +858,12 @@ function renderEdit(c) { renderComponentForm(c); }
 // ---------- Print all labels ----------
 async function renderLabels() {
   app.innerHTML = `<div class="pagehead"><h2>Labels</h2></div>` + skeleton(3);
-  const { data } = await sb.from('components').select('id,name,location,location_id').eq('workspace_id', S.ws.id).order('name');
+  const { data } = await sb.from('components').select('id,name,location,location_id,tag').eq('workspace_id', S.ws.id).order('name');
   app.innerHTML = `
     <div class="pagehead noprint"><h2>Labels</h2><button class="sm" onclick="window.print()">Print all</button></div>
     ${(data || []).length ? `<div class="labels">${data.map((c, i) => `
       <div class="label" style="animation:rise .32s var(--ease) ${Math.min(i, 10) * 35}ms both"><div class="q">${qrSvg(compUrl(c.id))}</div>
-        <div class="n">${esc(c.name)}</div><div class="mut">${esc(c.location_id ? locPath(c.location_id) : (c.location || ''))}</div></div>`).join('')}</div>`
+        ${c.tag ? `<div class="tg">${esc(c.tag)}</div>` : ''}<div class="n">${esc(c.name)}</div><div class="mut">${esc(c.location_id ? locPath(c.location_id) : (c.location || ''))}</div></div>`).join('')}</div>`
       : '<div class="card mut" style="text-align:center">No components yet. Add one first.</div>'}`;
 }
 
@@ -808,7 +877,7 @@ function renderSetup() {
     ${migrationBanner()}
     <div class="card"><h2>Component types</h2>
       <p class="mut">A type groups similar equipment (Boiler, Pump…) and decides which fields it has.</p>
-      ${S.types.map(t => `<a class="trow linkbtn" href="#/type/${t.id}"><span class="nm"><b>${esc(t.name)}</b> <span class="mut">${S.fields.filter(f => f.type_id === t.id).length} fields</span></span><span>→</span></a>`).join('') || '<div class="mut">No types yet.</div>'}
+      ${S.types.map(t => `<a class="trow linkbtn" href="#/type/${t.id}"><span class="nm"><b>${esc(t.name)}</b> <span class="mut">${t.prefix ? esc(t.prefix) + ' · ' : ''}${S.fields.filter(f => f.type_id === t.id).length} fields</span></span><span>→</span></a>`).join('') || '<div class="mut">No types yet.</div>'}
       <div class="row" style="margin-top:12px"><input id="tn" placeholder="New type, e.g. Boiler" autocomplete="off"><button id="tadd">Add type</button></div>
       <div class="err" id="terr"></div>
     </div>
@@ -872,6 +941,10 @@ function renderType(id) {
     <div class="card"><label for="tname" style="margin-top:0">Type name</label>
       <div class="row"><input id="tname" value="${esc(t.name)}"><button class="sec" id="trename">Rename</button></div>
       <div class="err" id="err"></div></div>
+    <div class="card"><label for="tpre" style="margin-top:0">Asset tag prefix</label>
+      <div class="row"><input id="tpre" value="${esc(t.prefix || '')}" maxlength="5" placeholder="Auto" autocapitalize="characters" autocomplete="off" style="text-transform:uppercase"><button class="sec" id="tpsave">Save prefix</button></div>
+      <p class="mut" style="margin:6px 0 0">${t.prefix ? `Next tag: <b>${esc(t.prefix)}-${String(t.next_number || 1).padStart(3, '0')}</b>. ` : 'Leave blank and one is picked from the type name the first time you add one. '}Changing it only affects new tags.</p>
+      <div class="err" id="perr2"></div></div>
     <div class="card"><h2>Fields (${defs.length})</h2>
       <p class="mut">Every component of this type shows these fields.</p>
       ${defs.map((f, i) => `<div class="frow">
@@ -895,6 +968,14 @@ function renderType(id) {
     const { error } = await sb.from('component_types').update({ name }).eq('id', id);
     if (error) return setErr(error.message);
     await loadMeta(); toast('Renamed'); redo();
+  });
+  $('tpsave').onclick = ev => busy(ev.currentTarget, async () => {
+    const v = $('tpre').value.trim().toUpperCase();
+    if (v && !/^[A-Z0-9]{2,5}$/.test(v)) return setErr('Use 2 to 5 letters or numbers', 'perr2');
+    setErr('', 'perr2');
+    const { error } = await sb.from('component_types').update({ prefix: v || null }).eq('id', id);
+    if (error) return setErr(error.message, 'perr2');
+    await loadMeta(); toast('Prefix saved'); redo();
   });
   $('addfield').onclick = () => openFieldForm($('newfield'), id, null, redo);
   app.querySelectorAll('[data-fedit]').forEach(b => b.onclick = () =>
