@@ -230,7 +230,7 @@ const profileBtn = document.getElementById('profileBtn');
 const tabs = document.getElementById('tabs');
 
 const S = { user: null, workspaces: [], ws: null, members: {}, components: [], flash: false,
-  locations: [], types: [], fields: [], metaError: false, filter: { type: '', loc: '' }, locEdit: null };
+  locations: [], types: [], fields: [], metaError: false, filter: { type: '', loc: '' }, locEdit: null, bulk: null };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = d => new Date(d).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
@@ -258,6 +258,8 @@ function friendlyErr(m) {
   if (/components_tag_uniq/i.test(m)) return 'That asset tag already exists. Try again.';
   if (/allocate_tags|column .*(tag|prefix|next_number)/i.test(m)) return 'One database step is missing: run tags.sql in Supabase, then try again.';
   if (/set_display_name|could not find the function/i.test(m)) return 'One database step is missing: run profile.sql in Supabase, then try again.';
+  if (/column .*(kind|ifc_guid)|locations_kind_check|ifc_guid\(\)/i.test(m)) return 'One database step is missing: run locations.sql in Supabase, then try again.';
+  if (/locations_guid_uniq/i.test(m)) return 'That IFC GlobalId is already used by another location.';
   if (/rate limit/i.test(m)) return 'Too many attempts. Wait a few minutes and try again.';
   return m;
 }
@@ -309,6 +311,9 @@ async function loadMeta() {
 const migrationBanner = () => S.metaError ? `
   <div class="card warn"><h2>One setup step left</h2>
     <p>Locations and fields need a database update. In Supabase, open <b>SQL Editor</b>, paste the contents of <code>stage1.sql</code> and run it once. Then reload this page.</p></div>` : '';
+const LOC_KIND = { site: 'Site', building: 'Building', storey: 'Floor', space: 'Room', other: 'Other' };
+const kindOptions = sel => `<option value="">— not set —</option>` + Object.entries(LOC_KIND).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${v}</option>`).join('');
+const GUID_RE = /^[0-3][0-9A-Za-z_$]{21}$/;
 const locById = id => S.locations.find(l => l.id === id);
 const typeById = id => S.types.find(t => t.id === id);
 function locPath(id) {
@@ -780,7 +785,7 @@ async function renderComponent(id, afterJoin = false) {
       <div class="tl">
       ${(recs || []).map(r => `
         <div class="rec"><span class="tag">${esc(r.type)}</span>
-          <span class="mut meta">${fmt(r.performed_at)} · ${esc(S.members[r.performed_by]?.display_name || 'unknown')}</span>
+          <span class="mut meta">${fmt(r.performed_at)} · ${esc(S.members[r.performed_by]?.display_name || r.author_name || 'former member')}</span>
           <div>${esc(r.description).replace(/\n/g, '<br>')}</div>
           ${(r.performed_by === S.user.id || isOwner) ? `<button class="sec sm noprint" data-del="${r.id}" style="margin-top:8px">Delete</button>` : ''}
         </div>`).join('') || '<div class="mut">No records yet. Log the first one above.</div>'}
@@ -892,12 +897,16 @@ function renderSetup() {
         <label for="ln">${ed.id ? 'Rename / move location' : 'New location'}</label>
         <input id="ln" value="${esc(ed.id ? locById(ed.id)?.name : '')}" placeholder="e.g. Building A, Floor 2, Boiler room" autocomplete="off">
         <label for="lp">Inside</label><select id="lp">${locOptions(ed.parent_id, '— top level —', excl)}</select>
+        <label for="lk">Kind</label><select id="lk">${kindOptions(ed.id ? locById(ed.id)?.kind : ed.kind)}</select>
+        ${ed.id ? `<label for="lg">IFC GlobalId</label><input id="lg" value="${esc(locById(ed.id)?.ifc_guid || '')}" autocomplete="off" spellcheck="false" style="font-family:ui-monospace,monospace;font-size:13px">
+        <p class="mut" style="margin:4px 0 0">Created automatically. Paste a room's GlobalId from your IFC model here to link them.</p>` : ''}
         <div class="err" id="lerr"></div>
         <div class="row"><button id="lsave">Save</button><button class="sec" id="lcancel">Cancel</button>${ed.id && owner ? '<button class="bad" id="ldel">Delete</button>' : ''}</div>
       </div>` : ''}
-      ${locTree().map(l => `<div class="trow" style="padding-left:${l.depth * 18}px"><span class="nm">${l.depth ? '└ ' : ''}${esc(l.name)}</span>
+      ${locTree().map(l => `<div class="trow" style="padding-left:${l.depth * 18}px"><span class="nm">${l.depth ? '└ ' : ''}${esc(l.name)}${l.kind ? ` <span class="mut">· ${LOC_KIND[l.kind]}</span>` : ''}</span>
         <button class="sec sm" data-sub="${l.id}">+ Sub</button><button class="sec sm" data-edit="${l.id}">Edit</button></div>`).join('') || '<div class="mut">No locations yet.</div>'}
-      ${ed ? '' : '<button id="ladd" style="margin-top:12px">+ Add location</button>'}
+      ${S.bulk ? bulkPanel() : ''}
+      ${ed || S.bulk ? '' : '<div class="row" style="margin-top:12px;flex-wrap:wrap"><button id="ladd">+ Add location</button><button class="sec" id="blist">Add many</button><button class="sec" id="bfloors">Build floors &amp; rooms</button></div>'}
     </div>`;
   const $ = id => document.getElementById(id);
   onEnter('tn', 'tadd');
@@ -907,8 +916,11 @@ function renderSetup() {
     if (error) return setErr(error.message, 'terr');
     await loadMeta(); toast('Type added — now add its fields'); location.hash = '#/type/' + data.id;
   });
-  const lad = $('ladd'); if (lad) lad.onclick = () => { S.locEdit = { id: null, parent_id: '' }; renderSetup(); };
-  app.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { S.locEdit = { id: null, parent_id: b.dataset.sub }; renderSetup(); $('ln')?.focus(); });
+  const bl = $('blist'); if (bl) bl.onclick = () => { S.bulk = 'list'; renderSetup(); $('bn')?.focus(); };
+  const bf = $('bfloors'); if (bf) bf.onclick = () => { S.bulk = 'floors'; renderSetup(); };
+  if (S.bulk) wireBulk();
+  const lad = $('ladd'); if (lad) lad.onclick = () => { S.locEdit = { id: null, parent_id: '' }; S.bulk = null; renderSetup(); };
+  app.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { S.bulk = null; S.locEdit = { id: null, parent_id: b.dataset.sub }; renderSetup(); $('ln')?.focus(); });
   app.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
     const l = locById(b.dataset.edit); S.locEdit = { id: l.id, parent_id: l.parent_id || '' }; renderSetup(); $('ln')?.focus();
   });
@@ -917,10 +929,15 @@ function renderSetup() {
     $('lcancel').onclick = () => { S.locEdit = null; renderSetup(); };
     $('lsave').onclick = ev => busy(ev.currentTarget, async () => {
       const name = $('ln').value.trim(); if (!name) return setErr('Enter a name', 'lerr');
-      const parent_id = $('lp').value || null;
+      const parent_id = $('lp').value || null, kind = $('lk').value || null;
+      const row = { name, parent_id, kind };
+      if (ed.id) {
+        const g = $('lg').value.trim();
+        if (g !== locById(ed.id)?.ifc_guid) { if (!GUID_RE.test(g)) return setErr('A GlobalId is 22 characters (letters, numbers, _ and $).', 'lerr'); row.ifc_guid = g; }
+      }
       const { error } = ed.id
-        ? await sb.from('locations').update({ name, parent_id }).eq('id', ed.id)
-        : await sb.from('locations').insert({ workspace_id: S.ws.id, name, parent_id });
+        ? await sb.from('locations').update(row).eq('id', ed.id)
+        : await sb.from('locations').insert({ workspace_id: S.ws.id, ...row });
       if (error) return setErr(error.message, 'lerr');
       S.locEdit = null; await loadMeta(); toast('Location saved'); renderSetup();
     });
@@ -934,6 +951,71 @@ function renderSetup() {
       });
     };
   }
+}
+
+function floorLabel(n) { return n === 0 ? 'Ground floor' : n < 0 ? 'Basement ' + (-n) : 'Floor ' + n; }
+function floorPlan(f) {
+  const floors = [], rooms = [];
+  for (let i = 0; i < f.floors; i++) {
+    const n = f.first + i; floors.push(floorLabel(n));
+    for (let r = 1; r <= f.rooms; r++) {
+      const num = f.style === 'floor' ? (Math.abs(n) * 100 + r) : r;
+      rooms.push({ floor: i, name: (f.prefix ? f.prefix.trim() + ' ' : '') + (n < 0 && f.style === 'floor' ? 'B' : '') + num });
+    }
+  }
+  return { floors, rooms };
+}
+function bulkPanel() {
+  const cancel = '<button class="sec" id="bcancel" type="button">Cancel</button>';
+  if (S.bulk === 'list') return `<div class="panel"><b>Add many locations</b>
+    <label for="bp">Inside</label><select id="bp">${locOptions('', '— top level —')}</select>
+    <label for="bk">Kind</label><select id="bk">${kindOptions('space')}</select>
+    <label for="bn">Names, one per line</label>
+    <textarea id="bn" rows="6" placeholder="Room 101&#10;Room 102&#10;Room 103" style="width:100%"></textarea>
+    <div class="err" id="berr"></div><div class="row"><button id="bgo" type="button">Add</button>${cancel}</div></div>`;
+  return `<div class="panel"><b>Build floors &amp; rooms</b>
+    <p class="mut" style="margin:4px 0 0">Creates floors inside a building and rooms inside each floor. You can rename any of them later.</p>
+    <label for="bp">Inside (usually a building)</label><select id="bp">${locOptions('', '— top level —')}</select>
+    <div class="row"><div style="flex:1"><label for="bf">Floors</label><input id="bf" type="number" min="1" max="60" value="3" inputmode="numeric"></div>
+      <div style="flex:1"><label for="b0">First floor number</label><input id="b0" type="number" min="-5" max="100" value="1" inputmode="numeric"></div>
+      <div style="flex:1"><label for="br">Rooms per floor</label><input id="br" type="number" min="0" max="100" value="10" inputmode="numeric"></div></div>
+    <div class="row"><div style="flex:1"><label for="bx">Room name starts with</label><input id="bx" value="Room" autocomplete="off"></div>
+      <div style="flex:1"><label for="bs">Numbering</label><select id="bs"><option value="floor">101, 102… (floor × 100 + n)</option><option value="seq">1, 2, 3… on every floor</option></select></div></div>
+    <p class="mut" id="bprev" style="margin:8px 0 0"></p>
+    <div class="err" id="berr"></div><div class="row"><button id="bgo" type="button">Create</button>${cancel}</div></div>`;
+}
+function wireBulk() {
+  const $ = id => document.getElementById(id);
+  $('bcancel').onclick = () => { S.bulk = null; renderSetup(); };
+  const flat = () => ({ floors: Math.max(0, parseInt($('bf')?.value) || 0), first: parseInt($('b0')?.value) || 0,
+    rooms: Math.max(0, parseInt($('br')?.value) || 0), prefix: $('bx')?.value || '', style: $('bs')?.value });
+  if (S.bulk === 'floors') {
+    const prev = () => { const p = floorPlan(flat()); $('bprev').textContent = `Will create ${p.floors.length} floors and ${p.rooms.length} rooms` + (p.rooms[0] ? ` (first room: ${p.rooms[0].name}).` : '.'); };
+    ['bf', 'b0', 'br', 'bx', 'bs'].forEach(i => $(i).oninput = prev); prev();
+  }
+  $('bgo').onclick = ev => busy(ev.currentTarget, async () => {
+    const parent_id = $('bp').value || null, ws = S.ws.id;
+    if (S.bulk === 'list') {
+      const names = [...new Set($('bn').value.split('\n').map(x => x.trim()).filter(Boolean))];
+      if (!names.length) return setErr('Type at least one name', 'berr');
+      if (names.length > 500) return setErr('Add up to 500 at a time', 'berr');
+      const kind = $('bk').value || null;
+      const { error } = await sb.from('locations').insert(names.map(name => ({ workspace_id: ws, parent_id, name, kind })));
+      if (error) return setErr(error.message, 'berr');
+      S.bulk = null; await loadMeta(); toast(names.length + ' locations added'); return renderSetup();
+    }
+    const f = flat(), plan = floorPlan(f);
+    if (!plan.floors.length) return setErr('Enter at least one floor', 'berr');
+    if (plan.floors.length + plan.rooms.length > 500) return setErr('That is more than 500 at once. Build it in two steps.', 'berr');
+    const fr = await sb.from('locations').insert(plan.floors.map(name => ({ workspace_id: ws, parent_id, name, kind: 'storey' }))).select('id,name');
+    if (fr.error) return setErr(fr.error.message, 'berr');
+    const idByName = Object.fromEntries(fr.data.map(r => [r.name, r.id]));
+    if (plan.rooms.length) {
+      const rr = await sb.from('locations').insert(plan.rooms.map(r => ({ workspace_id: ws, parent_id: idByName[plan.floors[r.floor]], name: r.name, kind: 'space' })));
+      if (rr.error) { await loadMeta(); return setErr('Floors were created, but rooms failed: ' + rr.error.message, 'berr'); }
+    }
+    S.bulk = null; await loadMeta(); toast(`${plan.floors.length} floors, ${plan.rooms.length} rooms created`); renderSetup();
+  });
 }
 
 function renderType(id) {
