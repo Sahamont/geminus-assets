@@ -32,6 +32,9 @@
   .brand h1{font-family:var(--display);font-weight:400;font-size:17px;letter-spacing:.08em;text-transform:uppercase;margin:0}
   header select{width:auto;max-width:46vw;background:#000;color:#fff;border:1px solid #fff;padding:6px 8px;font-size:13px;min-height:36px;cursor:pointer}
   header button{min-height:36px;padding:6px 10px;font-size:12px}
+  .avatar{flex:0 0 auto;width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:#fff;color:#000;border:1px solid #fff;font-family:var(--display);font-size:16px;text-decoration:none;text-transform:uppercase;transition:transform .12s var(--ease),box-shadow .15s var(--ease)}
+  .avatar:active{transform:scale(.94)}
+  @media (hover:hover){.avatar:hover{box-shadow:3px 3px 0 #fff;transform:translate(-2px,-2px)}}
 
   /* ---------- layout ---------- */
   main{max-width:760px;margin:0 auto;padding:18px 14px}
@@ -199,7 +202,7 @@
     <h1>Geminus</h1>
   </a>
   <select id="wsSelect" class="hide" aria-label="Workspace"></select>
-  <button id="signOutBtn" class="sec sm hide">Sign out</button>
+  <a id="profileBtn" class="avatar hide" href="#/profile" aria-label="Your profile">?</a>
 </header>
 <main id="app"></main>
 
@@ -221,7 +224,7 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const app = document.getElementById('app');
 const wsSelect = document.getElementById('wsSelect');
-const signOutBtn = document.getElementById('signOutBtn');
+const profileBtn = document.getElementById('profileBtn');
 const tabs = document.getElementById('tabs');
 
 const S = { user: null, workspaces: [], ws: null, members: {}, components: [], flash: false,
@@ -246,6 +249,7 @@ function friendlyErr(m) {
   if (/invalid login/i.test(m)) return 'Wrong email or password.';
   if (/already registered/i.test(m)) return 'That email already has an account. Try signing in.';
   if (/invalid join code/i.test(m)) return "That join code isn't valid. Check it and try again.";
+  if (/set_display_name|could not find the function/i.test(m)) return 'One database step is missing: run profile.sql in Supabase, then try again.';
   if (/rate limit/i.test(m)) return 'Too many attempts. Wait a few minutes and try again.';
   return m;
 }
@@ -270,6 +274,8 @@ function onEnter(inputId, btnId) {
   if (i) i.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById(btnId).click(); });
 }
 function updateTabs() {
+  const myName = S.members[S.user?.id]?.display_name || (S.user?.email || '').split('@')[0];
+  profileBtn.textContent = (myName || '?').trim().charAt(0).toUpperCase() || '?';
   const show = !!(S.user && S.ws);
   tabs.classList.toggle('hide', !show);
   document.body.classList.toggle('has-tabs', show);
@@ -386,6 +392,7 @@ async function route() {
   const h = location.hash;
   let m;
   if ((m = h.match(/^#\/c\/([0-9a-f-]{36})$/i))) return renderComponent(m[1]);
+  if (h === '#/profile') return renderProfile();
   if (!S.workspaces.length) return renderWorkspaceSetup();
   if (h === '#/new') return renderNew();
   if (h === '#/labels') return renderLabels();
@@ -397,7 +404,7 @@ async function route() {
 
 // ---------- Auth ----------
 function renderAuth(mode = 'in') {
-  signOutBtn.classList.add('hide'); wsSelect.classList.add('hide');
+  profileBtn.classList.add('hide'); wsSelect.classList.add('hide');
   app.innerHTML = `
     <div class="card">
       <h2 class="big">Geminus Assets</h2>
@@ -443,7 +450,6 @@ sb.auth.onAuthStateChange(async (_evt, session) => {
   route();
 });
 
-signOutBtn.onclick = () => sb.auth.signOut();
 
 // ---------- Workspaces ----------
 async function loadWorkspaces() {
@@ -451,7 +457,7 @@ async function loadWorkspaces() {
   S.workspaces = data || [];
   const saved = lastWs.get();
   S.ws = S.workspaces.find(w => w.id === saved) || S.workspaces[0] || null;
-  signOutBtn.classList.remove('hide');
+  profileBtn.classList.remove('hide');
   wsSelect.classList.toggle('hide', !S.workspaces.length);
   wsSelect.innerHTML = S.workspaces.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')
     + '<option value="__new">+ New / join…</option>';
@@ -919,6 +925,60 @@ function renderType(id) {
       await loadMeta(); toast('Type deleted'); location.hash = '#/setup';
     });
   };
+}
+
+// ---------- Profile ----------
+function renderProfile() {
+  const email = S.user.email || '';
+  const current = S.members[S.user.id]?.display_name || email.split('@')[0];
+  app.innerHTML = `
+    <div class="pagehead"><h2>Profile</h2></div>
+    <div class="card">
+      <label for="dn" style="margin-top:0">Display name</label>
+      <input id="dn" value="${esc(current)}" maxlength="40" autocomplete="name">
+      <p class="mut" style="margin:6px 0 0">Shown on every maintenance record you log and in the team list. Past records update too.</p>
+      <label for="pe">Email</label>
+      <input id="pe" value="${esc(email)}" disabled>
+      <div class="err" id="err"></div>
+      <button id="psave">Save profile</button>
+    </div>
+    <div class="card">
+      <h2>Change password</h2>
+      <label for="np" style="margin-top:0">New password</label>
+      <input id="np" type="password" autocomplete="new-password" placeholder="At least 6 characters">
+      <label for="np2">Repeat new password</label>
+      <input id="np2" type="password" autocomplete="new-password">
+      <div class="err" id="perr"></div>
+      <button class="sec" id="ppw">Update password</button>
+    </div>
+    <div class="card">
+      <h2>Session</h2>
+      <p class="mut">Signed in on this device.</p>
+      <button class="sec" id="pout">Sign out</button>
+    </div>`;
+  const $ = id => document.getElementById(id);
+  onEnter('dn', 'psave');
+  $('psave').onclick = ev => busy(ev.currentTarget, async () => {
+    const name = $('dn').value.trim().replace(/\s+/g, ' ');
+    if (!name) return setErr('Enter a display name');
+    if (name.length > 40) return setErr('Keep it to 40 characters or fewer');
+    setErr('');
+    const { error } = await sb.rpc('set_display_name', { p_name: name });
+    if (error) return setErr(error.message);
+    await sb.auth.updateUser({ data: { display_name: name } });   // used for workspaces you join later
+    if (S.ws) await loadMembers();
+    updateTabs(); toast('Profile saved');
+  });
+  $('ppw').onclick = ev => busy(ev.currentTarget, async () => {
+    const a = $('np').value, b = $('np2').value;
+    if (a.length < 6) return setErr('Use at least 6 characters', 'perr');
+    if (a !== b) return setErr("The two passwords don't match", 'perr');
+    setErr('', 'perr');
+    const { error } = await sb.auth.updateUser({ password: a });
+    if (error) return setErr(error.message, 'perr');
+    $('np').value = ''; $('np2').value = ''; toast('Password updated');
+  });
+  $('pout').onclick = () => { location.hash = '#/'; sb.auth.signOut(); };
 }
 
 // ---------- Team ----------
