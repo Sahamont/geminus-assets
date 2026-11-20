@@ -251,6 +251,9 @@ function friendlyErr(m) {
   if (/invalid login/i.test(m)) return 'Wrong email or password.';
   if (/already registered/i.test(m)) return 'That email already has an account. Try signing in.';
   if (/invalid join code/i.test(m)) return "That join code isn't valid. Check it and try again.";
+  if (/set_member_role/i.test(m)) return 'One database step is missing: run roles.sql in Supabase, then try again.';
+  if (/workspace_members_role_check/i.test(m)) return 'Run roles.sql in Supabase first so the Maintainer role is available.';
+  if (/at least one owner/i.test(m)) return 'A workspace needs at least one owner. Make someone else an owner first.';
   if (/types_prefix_uniq/i.test(m)) return 'That prefix is already used by another type.';
   if (/components_tag_uniq/i.test(m)) return 'That asset tag already exists. Try again.';
   if (/allocate_tags|column .*(tag|prefix|next_number)/i.test(m)) return 'One database step is missing: run tags.sql in Supabase, then try again.';
@@ -290,7 +293,9 @@ function updateTabs() {
 }
 
 // ---------- Stage 1 helpers: locations, types, custom fields ----------
-const amOwner = () => S.members[S.user?.id]?.role === 'owner';
+const myRole = () => S.members[S.user?.id]?.role || 'member';
+const canManage = () => ['owner', 'maintainer'].includes(myRole());
+const ROLE_LABEL = { owner: 'Owner', maintainer: 'Maintainer', member: 'Member' };
 async function loadMeta() {
   if (!S.ws) return;
   const [l, t, f] = await Promise.all([
@@ -738,7 +743,7 @@ async function renderComponent(id, afterJoin = false) {
   }
   updateTabs();
   const { data: recs } = await sb.from('records').select('*').eq('component_id', id).order('performed_at', { ascending: false });
-  const isOwner = S.members[S.user.id]?.role === 'owner';
+  const isOwner = canManage();
   let recType = 'Service';
   const tName = c.type_id ? typeById(c.type_id)?.name : c.category;
   const lPath = c.location_id ? locPath(c.location_id) : (c.location || '');
@@ -869,7 +874,7 @@ async function renderLabels() {
 
 // ---------- Setup: locations + component types ----------
 function renderSetup() {
-  const owner = amOwner();
+  const owner = canManage();
   const ed = S.locEdit;
   const excl = ed?.id ? locAndDesc(ed.id) : new Set();
   app.innerHTML = `
@@ -935,7 +940,7 @@ function renderType(id) {
   const t = typeById(id);
   if (!t) { app.innerHTML = `<div class="card">Type not found.<div class="row" style="margin-top:10px"><button onclick="location.hash='#/setup'">Back to setup</button></div></div>`; return; }
   const defs = S.fields.filter(f => f.type_id === id);
-  const owner = amOwner();
+  const owner = canManage();
   app.innerHTML = `
     <div class="pagehead"><h2>${esc(t.name)}</h2><a class="count" href="#/setup">← Setup</a></div>
     <div class="card"><label for="tname" style="margin-top:0">Type name</label>
@@ -1064,29 +1069,57 @@ function renderProfile() {
 
 // ---------- Team ----------
 function renderTeam() {
-  const isOwner = S.members[S.user.id]?.role === 'owner';
+  const manage = canManage();
+  const me = S.user.id;
+  const roles = ['owner', 'maintainer', 'member'];
+  const order = { owner: 0, maintainer: 1, member: 2 };
+  const people = Object.entries(S.members).sort((a, b) => order[a[1].role] - order[b[1].role] || String(a[1].display_name).localeCompare(String(b[1].display_name)));
   app.innerHTML = `
     <div class="pagehead"><h2>Team</h2><span class="count">${esc(S.ws.name)}</span></div>
     <div class="card">
       <h2>Join code</h2>
-      <p class="mut">Share this with teammates so they can join this workspace.</p>
+      <p class="mut">Share this so someone can join. They start as a Member; then set their role below.</p>
       <div class="row"><input readonly id="jcode" value="${esc(S.ws.join_code)}" onclick="this.select()" style="font-family:monospace;letter-spacing:.1em">
         <button id="copy">Copy</button></div>
     </div>
-    <div class="card"><h2>Members (${Object.keys(S.members).length})</h2>
-      ${Object.entries(S.members).map(([uid, m]) => `
-        <div class="row" style="padding:8px 0;border-top:1px solid var(--soft)"><div>${esc(m.display_name || 'user')} <span class="tag ${m.role === 'owner' ? '' : 'line'}">${m.role}</span></div>
-        ${(isOwner && uid !== S.user.id) ? `<button class="sec sm" data-rm="${uid}">Remove</button>` : ''}</div>`).join('')}
+    <div class="card"><h2>Members (${people.length})</h2>
+      ${people.map(([uid, m]) => `
+        <div class="frow">
+          <div class="top"><b>${esc(m.display_name || 'user')}${uid === me ? ' <span class="mut">(you)</span>' : ''}</b>
+            ${manage ? '' : `<span class="tag ${m.role === 'owner' ? '' : 'line'}">${ROLE_LABEL[m.role]}</span>`}</div>
+          ${manage ? `<div class="row acts">
+            <select data-role="${uid}" aria-label="Role">${roles.map(r => `<option value="${r}" ${r === m.role ? 'selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select>
+            <button class="sec sm" data-rm="${uid}">${uid === me ? 'Leave' : 'Remove'}</button></div>` : ''}
+        </div>`).join('')}
+    </div>
+    <div class="card"><h2>What each role can do</h2>
+      <p style="margin:0 0 8px"><b>Owner</b> <span class="mut">the client. Full control. Can appoint or remove maintainers.</span></p>
+      <p style="margin:0 0 8px"><b>Maintainer</b> <span class="mut">full control. Can appoint or remove owners, as long as one owner remains.</span></p>
+      <p style="margin:0"><b>Member</b> <span class="mut">adds and edits components and records. Cannot delete setup items.</span></p>
     </div>`;
   document.getElementById('copy').onclick = async () => {
     try { await navigator.clipboard.writeText(S.ws.join_code); toast('Join code copied'); }
     catch { document.getElementById('jcode').select(); toast('Select and copy the code'); }
   };
+  app.querySelectorAll('[data-role]').forEach(sel => sel.onchange = async () => {
+    const uid = sel.dataset.role, role = sel.value, prev = S.members[uid].role;
+    const name = S.members[uid].display_name || 'this person';
+    const losing = uid === me && role === 'member';
+    if (uid === me && !confirm(losing ? 'Make yourself a Member? You will lose the ability to manage this workspace.' : `Change your own role to ${ROLE_LABEL[role]}?`)) { sel.value = prev; return; }
+    if (uid !== me && role === 'owner' && !confirm(`Make ${name} an owner of ${S.ws.name}?`)) { sel.value = prev; return; }
+    sel.disabled = true;
+    const { error } = await sb.rpc('set_member_role', { p_workspace: S.ws.id, p_user: uid, p_role: role });
+    if (error) { toast(friendlyErr(error.message), true); sel.value = prev; sel.disabled = false; return; }
+    await loadMembers(); toast(`${name} is now ${ROLE_LABEL[role]}`); updateTabs(); renderTeam();
+  });
   app.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => {
-    if (!confirm('Remove this member?')) return;
+    const uid = b.dataset.rm, name = S.members[uid]?.display_name || 'this person';
+    if (!confirm(uid === me ? `Leave ${S.ws.name}? You will lose access to its data.` : `Remove ${name} from ${S.ws.name}?`)) return;
     busy(b, async () => {
-      await sb.from('workspace_members').delete().eq('workspace_id', S.ws.id).eq('user_id', b.dataset.rm);
-      toast('Member removed'); await loadMembers(); renderTeam();
+      const { error } = await sb.from('workspace_members').delete().eq('workspace_id', S.ws.id).eq('user_id', uid);
+      if (error) return toast(friendlyErr(error.message), true);
+      if (uid === me) { toast('You left the workspace'); lastWs.set(''); await loadWorkspaces(); location.hash = '#/'; route(); return; }
+      toast(`${name} removed`); await loadMembers(); renderTeam();
     });
   });
 }
