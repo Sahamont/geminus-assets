@@ -171,6 +171,16 @@
   .frow .top b{flex:1;min-width:0;word-break:break-word}
   .frow .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
   .warn{border-color:var(--bad);background:#fff5f5}
+  .due{display:inline-block;padding:2px 8px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--ink);background:#fff;color:var(--ink);white-space:nowrap}
+  .due.over{background:var(--bad);border-color:var(--bad);color:#fff}
+  .due.soon{background:var(--ink);color:#fff}
+  .trk{padding:12px 0;border-top:1px solid var(--soft)}
+  .trk:first-of-type{border-top:0}
+  .trk .top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .trk .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .trk .ins{font-size:14px;color:#333;margin-top:6px;white-space:pre-wrap}
+  .bannerlink{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border:1px solid var(--line);background:#fff;color:inherit;text-decoration:none;margin-bottom:12px}
+  .bannerlink.over{border-color:var(--bad);background:#fff5f5}
   .warn code{background:#fff;padding:1px 5px;border:1px solid #e0b4b4}
   .linkbtn{display:block;text-decoration:none;color:inherit}
   .hide{display:none!important}
@@ -230,7 +240,7 @@ const profileBtn = document.getElementById('profileBtn');
 const tabs = document.getElementById('tabs');
 
 const S = { user: null, workspaces: [], ws: null, members: {}, components: [], flash: false,
-  locations: [], types: [], fields: [], metaError: false, filter: { type: '', loc: '' }, locEdit: null, bulk: null };
+  locations: [], types: [], fields: [], metaError: false, filter: { type: '', loc: '' }, locEdit: null, bulk: null, tasks: [], done: {}, taskError: false };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = d => new Date(d).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
@@ -260,6 +270,7 @@ function friendlyErr(m) {
   if (/set_display_name|could not find the function/i.test(m)) return 'One database step is missing: run profile.sql in Supabase, then try again.';
   if (/column .*(kind|ifc_guid)|locations_kind_check|ifc_guid\(\)/i.test(m)) return 'One database step is missing: run locations.sql in Supabase, then try again.';
   if (/locations_guid_uniq/i.test(m)) return 'That IFC GlobalId is already used by another location.';
+  if (/task_defs_gm|records.*task_id|column .*task_id/i.test(m)) return 'One database step is missing: run tasks.sql in Supabase, then try again.';
   if (/rate limit/i.test(m)) return 'Too many attempts. Wait a few minutes and try again.';
   return m;
 }
@@ -290,7 +301,7 @@ function updateTabs() {
   tabs.classList.toggle('hide', !show);
   document.body.classList.toggle('has-tabs', show);
   const h = (location.hash && location.hash !== '#') ? location.hash : '#/';
-  const hh = h.startsWith('#/type/') ? '#/setup' : h;
+  const hh = h.startsWith('#/type/') ? '#/setup' : h === '#/due' ? '#/' : h;
   tabs.querySelectorAll('a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === hh));
 }
 
@@ -311,6 +322,74 @@ async function loadMeta() {
 const migrationBanner = () => S.metaError ? `
   <div class="card warn"><h2>One setup step left</h2>
     <p>Locations and fields need a database update. In Supabase, open <b>SQL Editor</b>, paste the contents of <code>stage1.sql</code> and run it once. Then reload this page.</p></div>` : '';
+// ---------- Recurring tasks ----------
+const DAY = 864e5;
+async function loadTasks() {
+  S.tasks = []; S.done = {}; S.taskError = false;
+  if (!S.ws) return;
+  const [t, r] = await Promise.all([
+    sb.from('task_defs_gm').select('*').eq('workspace_id', S.ws.id).order('created_at'),
+    sb.from('records').select('component_id,task_id,performed_at').eq('workspace_id', S.ws.id).not('task_id', 'is', null).order('performed_at', { ascending: false }).limit(5000)
+  ]);
+  if (t.error || r.error) { S.taskError = true; return; }
+  S.tasks = t.data || [];
+  (r.data || []).forEach(x => { const k = x.component_id + '|' + x.task_id; const d = +new Date(x.performed_at); if (!(S.done[k] >= d)) S.done[k] = d; });
+}
+// Tasks that apply to one component: type templates (unless overridden/skipped) plus its own.
+function tasksFor(c) {
+  const over = {}; S.tasks.forEach(t => { if (t.component_id === c.id && t.overrides_id) over[t.overrides_id] = t; });
+  const out = [], skipped = [];
+  S.tasks.filter(t => t.type_id && t.type_id === c.type_id).forEach(base => {
+    const o = over[base.id];
+    if (!o) out.push({ eff: base, base, source: 'type' });
+    else if (o.disabled) skipped.push({ eff: o, base });
+    else out.push({ eff: o, base, source: 'override' });
+  });
+  S.tasks.filter(t => t.component_id === c.id && !t.overrides_id).forEach(t => out.push({ eff: t, base: null, source: 'own' }));
+  return { out, skipped };
+}
+function taskState(c, row) {
+  let last = 0;
+  [row.eff.id, row.base?.id].forEach(id => { const d = id && S.done[c.id + '|' + id]; if (d > last) last = d; });
+  const start = last || Math.max(+new Date(row.eff.created_at), +new Date(c.created_at));
+  const due = start + row.eff.interval_days * DAY;
+  return { last, due, days: Math.ceil((due - Date.now()) / DAY) };
+}
+const dueText = d => d < 0 ? `Overdue ${-d} d` : d === 0 ? 'Due today' : `Due in ${d} d`;
+const dueChip = d => `<span class="due ${d < 0 ? 'over' : d <= 7 ? 'soon' : ''}">${dueText(d)}</span>`;
+const everyText = n => n % 365 === 0 ? (n === 365 ? 'Every year' : `Every ${n / 365} years`) : n % 30 === 0 ? (n === 30 ? 'Every month' : `Every ${n / 30} months`) : n % 7 === 0 ? (n === 7 ? 'Every week' : `Every ${n / 7} weeks`) : `Every ${n} days`;
+function allDue() {
+  const rows = [];
+  S.components.forEach(c => tasksFor(c).out.forEach(r => rows.push({ c, r, ...taskState(c, r) })));
+  return rows.sort((a, b) => a.days - b.days);
+}
+// Shared add/edit form for a task. scope: {type_id} | {component_id} ; base = type task being customized
+function openTaskForm(host, scope, existing, done, base) {
+  const e = existing || base || {};
+  host.innerHTML = `<div class="panel">
+    <label for="tt">Task</label><input id="tt" value="${esc(e.title || '')}" placeholder="e.g. Inspect and clean" autocomplete="off">
+    <label for="ti">Repeat every (days)</label><input id="ti" type="number" min="1" max="3650" inputmode="numeric" value="${esc(e.interval_days || '')}" placeholder="e.g. 90">
+    <div class="chips" style="margin-top:8px">${[['Weekly', 7], ['Monthly', 30], ['Quarterly', 90], ['Twice a year', 182], ['Yearly', 365]].map(([l, n]) => `<button type="button" class="chip" data-n="${n}">${l}</button>`).join('')}</div>
+    <label for="tx">Steps / instructions (optional)</label><textarea id="tx" placeholder="1. Turn off power&#10;2. Clean the filter&#10;3. Check for leaks">${esc(e.instructions || '')}</textarea>
+    <div class="err" id="terr2"></div>
+    <div class="row"><button id="tsave" type="button">Save task</button><button class="sec" id="tcancel" type="button">Cancel</button></div></div>`;
+  const $ = id => host.querySelector('#' + id);
+  host.querySelectorAll('.chip').forEach(b => b.onclick = () => { $('ti').value = b.dataset.n; });
+  $('tcancel').onclick = () => { host.innerHTML = ''; };
+  $('tt').focus();
+  $('tsave').onclick = ev => busy(ev.currentTarget, async () => {
+    const title = $('tt').value.trim(), n = parseInt($('ti').value);
+    if (!title) return setErr('Give the task a name', 'terr2');
+    if (!(n >= 1 && n <= 3650)) return setErr('Enter a number of days between 1 and 3650', 'terr2');
+    const row = { title, interval_days: n, instructions: $('tx').value.trim() || null };
+    const { error } = existing
+      ? await sb.from('task_defs_gm').update(row).eq('id', existing.id)
+      : await sb.from('task_defs_gm').insert({ workspace_id: S.ws.id, ...scope, ...(base ? { overrides_id: base.id } : {}), ...row });
+    if (error) return setErr(error.message, 'terr2');
+    toast('Task saved'); done();
+  });
+}
+
 const LOC_KIND = { site: 'Site', building: 'Building', storey: 'Floor', space: 'Room', other: 'Other' };
 const kindOptions = sel => `<option value="">— not set —</option>` + Object.entries(LOC_KIND).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${v}</option>`).join('');
 const GUID_RE = /^[0-3][0-9A-Za-z_$]{21}$/;
@@ -413,6 +492,7 @@ async function route() {
   if (h === '#/new') return renderNew();
   if (h === '#/labels') return renderLabels();
   if (h === '#/team') return renderTeam();
+  if (h === '#/due') return renderDue();
   if (h === '#/setup') return renderSetup();
   if ((m = h.match(/^#\/type\/([0-9a-f-]{36})$/i))) return renderType(m[1]);
   return renderList();
@@ -539,9 +619,13 @@ async function renderList() {
     return;
   }
   const showFilters = S.types.length || S.locations.length;
+  await loadTasks();
+  const dueRows = S.taskError ? [] : allDue();
+  const nOver = dueRows.filter(x => x.days < 0).length, nSoon = dueRows.filter(x => x.days >= 0 && x.days <= 7).length;
   app.innerHTML = `
     <div class="pagehead"><h2>Assets</h2><span class="count" id="cnt"></span></div>
     ${migrationBanner()}
+    ${nOver || nSoon ? `<a class="bannerlink ${nOver ? 'over' : ''}" href="#/due"><span><b>${nOver} overdue</b> · ${nSoon} due this week</span><span>→</span></a>` : ''}
     <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
       <input id="q" type="search" placeholder="Search components…" autocomplete="off"></div>
     ${showFilters ? `<div class="filters">
@@ -737,6 +821,24 @@ function renderBatch() {
 
 // ---------- Component detail ----------
 const REC_TYPES = ['Service', 'Inspection', 'Repair', 'Replacement', 'Cleaning', 'Other'];
+async function renderDue() {
+  app.innerHTML = `<div class="pagehead"><h2>Due</h2><a class="count" href="#/">← Assets</a></div>` + skeleton(3);
+  const { data, error } = await sb.from('components').select('*').eq('workspace_id', S.ws.id).order('name');
+  if (error) { app.innerHTML = `<div class="card"><div class="err">${esc(friendlyErr(error.message))}</div></div>`; return; }
+  S.components = data; await loadTasks();
+  if (S.taskError) { app.innerHTML = `<div class="pagehead"><h2>Due</h2></div><div class="card warn"><h2>One setup step left</h2><p>In Supabase, open <b>SQL Editor</b>, paste <code>tasks.sql</code> and run it once. Then reload.</p></div>`; return; }
+  const rows = allDue();
+  const groups = [['Overdue', x => x.days < 0], ['This week', x => x.days >= 0 && x.days <= 7], ['Next 30 days', x => x.days > 7 && x.days <= 30]];
+  const item = x => { const lp = x.c.location_id ? locPath(x.c.location_id) : ''; return `<a class="item" href="#/c/${x.c.id}">
+    <div class="t"><b>${esc(x.r.eff.title)}</b><span class="mut">${x.c.tag ? `<span class="tag line" style="font-weight:700">${esc(x.c.tag)}</span>` : ''}${esc(x.c.name)}${lp ? ' · ' + esc(lp) : ''}</span></div>${dueChip(x.days)}</a>`; };
+  const later = rows.filter(x => x.days > 30).length;
+  app.innerHTML = `<div class="pagehead"><h2>Due</h2><a class="count" href="#/">← Assets</a></div>
+    ${rows.length ? '' : '<div class="card empty"><h2>No recurring tasks yet</h2><p>Open a component type in Setup and add a recurring task, like “Inspect every 90 days”. It will show up here.</p><button onclick="location.hash=\'#/setup\'">Go to Setup</button></div>'}
+    ${groups.map(([label, f]) => { const g = rows.filter(f); return g.length ? `<h3 style="margin:18px 0 8px;font-size:12px;letter-spacing:.14em;text-transform:uppercase">${label} (${g.length})</h3>${g.map(item).join('')}` : ''; }).join('')}
+    ${rows.length && !rows.some(x => x.days <= 30) ? '<div class="card mut" style="text-align:center">Nothing due in the next 30 days.</div>' : ''}
+    ${later ? `<p class="mut" style="text-align:center">${later} more task${later === 1 ? '' : 's'} due later than 30 days.</p>` : ''}`;
+}
+
 async function renderComponent(id, afterJoin = false) {
   app.innerHTML = skeleton(3);
   const { data: c, error } = await sb.from('components').select('*').eq('id', id).maybeSingle();
@@ -748,8 +850,10 @@ async function renderComponent(id, afterJoin = false) {
   }
   updateTabs();
   const { data: recs } = await sb.from('records').select('*').eq('component_id', id).order('performed_at', { ascending: false });
+  await loadTasks();
+  const tk = S.taskError ? { out: [], skipped: [] } : tasksFor(c);
   const isOwner = canManage();
-  let recType = 'Service';
+  let recType = 'Service', logTask = null;
   const tName = c.type_id ? typeById(c.type_id)?.name : c.category;
   const lPath = c.location_id ? locPath(c.location_id) : (c.location || '');
   const defs = c.type_id ? S.fields.filter(f => f.type_id === c.type_id) : [];
@@ -773,8 +877,24 @@ async function renderComponent(id, afterJoin = false) {
         ${isOwner ? '<button class="bad" id="del">Delete</button>' : ''}
       </div>
     </div>
+    <div class="card noprint"><h2>Schedule</h2>
+      ${S.taskError ? '<p class="mut">Recurring tasks need one database step: run <code>tasks.sql</code> in Supabase, then reload.</p>' : ''}
+      ${tk.out.map((r, i) => { const st = taskState(c, r); return `<div class="trk">
+        <div class="top"><b>${esc(r.eff.title)}</b>${dueChip(st.days)}</div>
+        <div class="mut">${everyText(r.eff.interval_days)} · ${st.last ? 'last done ' + fmt(new Date(st.last).toISOString()) : 'never logged'}${r.source === 'override' ? ' · custom for this asset' : ''}</div>
+        ${r.eff.instructions ? `<div class="ins">${esc(r.eff.instructions)}</div>` : ''}
+        <div class="acts"><button class="sm" data-log="${i}">Log it</button>
+          ${r.source === 'type' ? `<button class="sec sm" data-cust="${i}">Customize</button><button class="sec sm" data-skip="${i}">Skip here</button>` : ''}
+          ${r.source === 'override' ? `<button class="sec sm" data-tedit="${i}">Edit</button><button class="sec sm" data-treset="${r.eff.id}">Use type default</button>` : ''}
+          ${r.source === 'own' ? `<button class="sec sm" data-tedit="${i}">Edit</button><button class="sec sm" data-treset="${r.eff.id}">Delete</button>` : ''}</div>
+        <div data-thost="${i}"></div></div>`; }).join('') || (S.taskError ? '' : '<div class="mut">No recurring tasks yet.</div>')}
+      ${tk.skipped.map(x => `<div class="mut" style="margin-top:8px">Skipped here: ${esc(x.base.title)} <button class="sec sm" data-treset="${x.eff.id}">Restore</button></div>`).join('')}
+      <div id="newtask"></div>
+      ${S.taskError ? '' : '<button class="sec" id="addtask" style="margin-top:12px">+ Add task for this asset</button>'}
+    </div>
     <div class="card noprint">
       <h2>Log maintenance</h2>
+      <div id="logfor"></div>
       <label>Type</label>
       <div class="chips" id="chips">${REC_TYPES.map(t => `<button type="button" class="chip" aria-pressed="${t === 'Service'}" data-t="${t}">${t}</button>`).join('')}</div>
       <label for="rd">What was done *</label><textarea id="rd" placeholder="Describe the work, parts used, readings…"></textarea>
@@ -812,7 +932,7 @@ async function renderComponent(id, afterJoin = false) {
   document.getElementById('addrec').onclick = ev => busy(ev.currentTarget, async () => {
     const description = document.getElementById('rd').value.trim(); if (!description) return setErr('Describe what was done');
     const { error } = await sb.from('records').insert({
-      component_id: c.id, workspace_id: c.workspace_id, type: recType, description });
+      component_id: c.id, workspace_id: c.workspace_id, type: recType, description, ...(logTask ? { task_id: logTask.eff.id } : {}) });
     if (error) return setErr(error.message);
     S.flash = true; toast('Record added'); renderComponent(id);
   });
@@ -825,6 +945,37 @@ async function renderComponent(id, afterJoin = false) {
     });
   });
   document.getElementById('edit').onclick = () => renderEdit(c);
+  const redoC = () => renderComponent(id);
+  const showLogFor = () => {
+    const el = document.getElementById('logfor');
+    el.innerHTML = logTask ? `<div class="panel" style="margin-top:0"><b>Completing: ${esc(logTask.eff.title)}</b> <button class="sec sm" id="unlog" type="button" style="float:right">✕</button>${logTask.eff.instructions ? `<div class="ins" style="font-size:14px;white-space:pre-wrap;margin-top:6px">${esc(logTask.eff.instructions)}</div>` : ''}</div>` : '';
+    const u = document.getElementById('unlog'); if (u) u.onclick = () => { logTask = null; showLogFor(); };
+  };
+  app.querySelectorAll('[data-log]').forEach(b => b.onclick = () => {
+    logTask = tk.out[+b.dataset.log]; showLogFor();
+    const rd = document.getElementById('rd'); if (!rd.value.trim()) rd.value = logTask.eff.title;
+    rd.scrollIntoView({ behavior: 'smooth', block: 'center' }); rd.focus();
+  });
+  app.querySelectorAll('[data-cust]').forEach(b => b.onclick = () => { const r = tk.out[+b.dataset.cust];
+    openTaskForm(app.querySelector(`[data-thost="${b.dataset.cust}"]`), { component_id: c.id }, null, redoC, r.base); });
+  app.querySelectorAll('[data-tedit]').forEach(b => b.onclick = () => { const r = tk.out[+b.dataset.tedit];
+    openTaskForm(app.querySelector(`[data-thost="${b.dataset.tedit}"]`), { component_id: c.id }, r.eff, redoC); });
+  app.querySelectorAll('[data-skip]').forEach(b => b.onclick = () => busy(b, async () => {
+    const r = tk.out[+b.dataset.skip];
+    const { error } = await sb.from('task_defs_gm').insert({ workspace_id: c.workspace_id, component_id: c.id, overrides_id: r.base.id, title: r.base.title, interval_days: r.base.interval_days, disabled: true });
+    if (error) return toast(friendlyErr(error.message), true);
+    toast('Skipped for this asset'); redoC();
+  }));
+  app.querySelectorAll('[data-treset]').forEach(b => b.onclick = () => {
+    if (b.textContent === 'Delete' && !confirm('Delete this task? Records already logged stay.')) return;
+    busy(b, async () => {
+      const { error } = await sb.from('task_defs_gm').delete().eq('id', b.dataset.treset);
+      if (error) return toast(friendlyErr(error.message), true);
+      toast('Done'); redoC();
+    });
+  });
+  const at = document.getElementById('addtask');
+  if (at) at.onclick = () => openTaskForm(document.getElementById('newtask'), { component_id: c.id }, null, redoC);
   const del = document.getElementById('del');
   if (del) del.onclick = () => {
     if (!confirm('Delete this component and ALL its records?')) return;
@@ -1018,9 +1169,11 @@ function wireBulk() {
   });
 }
 
-function renderType(id) {
+async function renderType(id) {
   const t = typeById(id);
   if (!t) { app.innerHTML = `<div class="card">Type not found.<div class="row" style="margin-top:10px"><button onclick="location.hash='#/setup'">Back to setup</button></div></div>`; return; }
+  await loadTasks();
+  const ttasks = S.tasks.filter(x => x.type_id === id);
   const defs = S.fields.filter(f => f.type_id === id);
   const owner = canManage();
   app.innerHTML = `
@@ -1047,6 +1200,16 @@ function renderType(id) {
       <div id="newfield"></div>
       <button id="addfield" style="margin-top:14px">+ Add field</button>
     </div>
+    <div class="card"><h2>Recurring tasks (${ttasks.length})</h2>
+      <p class="mut">Every ${esc(t.name)} gets these. Each asset can customize or skip a task on its own page.</p>
+      ${S.taskError ? '<p class="mut">Run <code>tasks.sql</code> in Supabase first, then reload.</p>' : ''}
+      ${ttasks.map(x => `<div class="trk"><div class="top"><b>${esc(x.title)}</b><span class="tag line">${everyText(x.interval_days)}</span></div>
+        ${x.instructions ? `<div class="ins">${esc(x.instructions)}</div>` : ''}
+        <div class="acts"><button class="sec sm" data-ttedit="${x.id}">Edit</button>${owner ? `<button class="bad sm" data-ttdel="${x.id}">Delete</button>` : ''}</div>
+        <div data-tth="${x.id}"></div></div>`).join('') || (S.taskError ? '' : '<div class="mut">No tasks yet.</div>')}
+      <div id="newtt"></div>
+      ${S.taskError ? '' : '<button id="addtt" style="margin-top:12px">+ Add task</button>'}
+    </div>
     ${owner ? `<div class="card"><h2>Delete type</h2><p class="mut">Components keep their data but lose this type.</p><button class="bad" id="tdel">Delete type</button></div>` : ''}`;
   const $ = id => document.getElementById(id);
   const redo = () => renderType(id);
@@ -1065,6 +1228,17 @@ function renderType(id) {
     await loadMeta(); toast('Prefix saved'); redo();
   });
   $('addfield').onclick = () => openFieldForm($('newfield'), id, null, redo);
+  const att = $('addtt'); if (att) att.onclick = () => openTaskForm($('newtt'), { type_id: id }, null, redo);
+  app.querySelectorAll('[data-ttedit]').forEach(b => b.onclick = () =>
+    openTaskForm(app.querySelector(`[data-tth="${b.dataset.ttedit}"]`), {}, ttasks.find(x => x.id === b.dataset.ttedit), redo));
+  app.querySelectorAll('[data-ttdel]').forEach(b => b.onclick = () => {
+    if (!confirm('Delete this task for every asset of this type? Records already logged stay.')) return;
+    busy(b, async () => {
+      const { error } = await sb.from('task_defs_gm').delete().eq('id', b.dataset.ttdel);
+      if (error) return toast(friendlyErr(error.message), true);
+      toast('Task deleted'); redo();
+    });
+  });
   app.querySelectorAll('[data-fedit]').forEach(b => b.onclick = () =>
     openFieldForm(app.querySelector(`[data-host="${b.dataset.fedit}"]`), id, defs.find(f => f.id === b.dataset.fedit), redo));
   const move = async (fid, dir) => {
