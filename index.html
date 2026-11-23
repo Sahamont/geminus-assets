@@ -31,6 +31,12 @@
   .brand svg{width:22px;height:22px;flex:0 0 auto}
   .brand h1{font-family:var(--display);font-weight:400;font-size:17px;letter-spacing:.08em;text-transform:uppercase;margin:0}
   header select{width:auto;max-width:46vw;background:#000;color:#fff;border:1px solid #fff;padding:6px 8px;font-size:13px;min-height:36px;cursor:pointer}
+  #wsSelect{display:none!important}
+  .wsbtn{flex:0 1 auto;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#000;color:#fff;border:1px solid #fff;padding:7px 10px;font-size:13px;min-height:36px;text-decoration:none;display:flex;align-items:center;gap:6px}
+  .wsbtn::after{content:"▾";font-size:11px}
+  .star{flex:0 0 auto;min-height:40px;min-width:40px;padding:0;background:#fff;color:var(--ink);border:1px solid var(--line);font-size:18px;line-height:1}
+  .star[aria-pressed="true"]{background:var(--ink);color:#fff}
+  .item[data-open]{cursor:pointer}
   header button{min-height:36px;padding:6px 10px;font-size:12px}
   .avatar{flex:0 0 auto;width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:#fff;color:#000;border:1px solid #fff;font-family:var(--display);font-size:16px;text-decoration:none;text-transform:uppercase;transition:transform .12s var(--ease),box-shadow .15s var(--ease)}
   .avatar:active{transform:scale(.94)}
@@ -214,6 +220,7 @@
     <h1>Geminus</h1>
   </a>
   <select id="wsSelect" class="hide" aria-label="Workspace"></select>
+  <a id="wsBtn" class="wsbtn hide" href="#/properties" aria-label="Switch property"></a>
   <a id="profileBtn" class="avatar hide" href="#/profile" aria-label="Your profile">?</a>
 </header>
 <main id="app"></main>
@@ -236,6 +243,7 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const app = document.getElementById('app');
 const wsSelect = document.getElementById('wsSelect');
+const wsBtn = document.getElementById('wsBtn');
 const profileBtn = document.getElementById('profileBtn');
 const tabs = document.getElementById('tabs');
 
@@ -244,8 +252,10 @@ const S = { user: null, workspaces: [], ws: null, members: {}, components: [], f
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = d => new Date(d).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+const PROP_KIND = { hotel: 'Hotel', house: 'House', commercial: 'Commercial', other: 'Other' };
 const lastWs = { get: () => { try { return localStorage.getItem('mqr_ws'); } catch { return null; } },
-                 set: v => { try { localStorage.setItem('mqr_ws', v); } catch {} } };
+                 set: v => { try { localStorage.setItem('mqr_ws', v); if (v) { const r = lastWs.recent(); r[v] = Date.now(); localStorage.setItem('mqr_recent', JSON.stringify(r)); } } catch {} },
+                 recent: () => { try { return JSON.parse(localStorage.getItem('mqr_recent') || '{}'); } catch { return {}; } } };
 
 function appBase() { return location.origin + location.pathname; }
 function inviteUrl(code) { return appBase() + '#/join/' + encodeURIComponent(code); }
@@ -301,9 +311,10 @@ function updateTabs() {
   profileBtn.textContent = (myName || '?').trim().charAt(0).toUpperCase() || '?';
   const show = !!(S.user && S.ws);
   tabs.classList.toggle('hide', !show);
+  wsBtn.classList.toggle('hide', !show); if (show) wsBtn.textContent = S.ws.name;
   document.body.classList.toggle('has-tabs', show);
   const h = (location.hash && location.hash !== '#') ? location.hash : '#/';
-  const hh = h.startsWith('#/type/') ? '#/setup' : h === '#/due' ? '#/' : h;
+  const hh = h.startsWith('#/type/') ? '#/setup' : (h === '#/due' || h === '#/properties') ? '#/' : h;
   tabs.querySelectorAll('a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === hh));
 }
 
@@ -326,16 +337,31 @@ const migrationBanner = () => S.metaError ? `
     <p>Locations and fields need a database update. In Supabase, open <b>SQL Editor</b>, paste the contents of <code>stage1.sql</code> and run it once. Then reload this page.</p></div>` : '';
 // ---------- Recurring tasks ----------
 const DAY = 864e5;
+// Supabase returns at most 1000 rows per request, so read big tables a page at a time.
+async function fetchAll(make) {
+  const out = [];
+  for (let from = 0; from < 100000; from += 1000) {
+    const { data, error } = await make().range(from, from + 999);
+    if (error) return { data: null, error };
+    out.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return { data: out, error: null };
+}
+function buildDone(recs) {
+  const done = {};
+  (recs || []).forEach(x => { const k = x.component_id + '|' + x.task_id; const d = +new Date(x.performed_at); if (!(done[k] >= d)) done[k] = d; });
+  return done;
+}
 async function loadTasks() {
   S.tasks = []; S.done = {}; S.taskError = false;
   if (!S.ws) return;
   const [t, r] = await Promise.all([
-    sb.from('task_defs_gm').select('*').eq('workspace_id', S.ws.id).order('created_at'),
-    sb.from('records').select('component_id,task_id,performed_at').eq('workspace_id', S.ws.id).not('task_id', 'is', null).order('performed_at', { ascending: false }).limit(5000)
+    fetchAll(() => sb.from('task_defs_gm').select('*').eq('workspace_id', S.ws.id).order('id')),
+    fetchAll(() => sb.from('records').select('id,component_id,task_id,performed_at').eq('workspace_id', S.ws.id).not('task_id', 'is', null).order('id'))
   ]);
   if (t.error || r.error) { S.taskError = true; return; }
-  S.tasks = t.data || [];
-  (r.data || []).forEach(x => { const k = x.component_id + '|' + x.task_id; const d = +new Date(x.performed_at); if (!(S.done[k] >= d)) S.done[k] = d; });
+  S.tasks = t.data; S.done = buildDone(r.data);
 }
 // Tasks that apply to one component: type templates (unless overridden/skipped) plus its own.
 function tasksFor(c) {
@@ -492,6 +518,7 @@ async function route() {
   if (h === '#/profile') return renderProfile();
   if (h === '#/batch') return renderBatch();
   if (!S.workspaces.length) return renderWorkspaceSetup();
+  if (h === '#/properties') return renderProperties();
   if (h === '#/new') return renderNew();
   if (h === '#/labels') return renderLabels();
   if (h === '#/team') return renderTeam();
@@ -552,7 +579,7 @@ sb.auth.onAuthStateChange(async (_evt, session) => {
 
 // ---------- Workspaces ----------
 async function loadWorkspaces() {
-  const { data } = await sb.from('workspaces').select('id,name,join_code').order('created_at');
+  const { data } = await sb.from('workspaces').select('*').order('created_at');
   S.workspaces = data || [];
   const saved = lastWs.get();
   S.ws = S.workspaces.find(w => w.id === saved) || S.workspaces[0] || null;
@@ -573,6 +600,77 @@ async function loadMembers() {
   const { data } = await sb.from('workspace_members').select('user_id,display_name,role').eq('workspace_id', S.ws.id);
   S.members = Object.fromEntries((data || []).map(m => [m.user_id, m]));
 }
+async function openWorkspace(id) {
+  const w = S.workspaces.find(x => x.id === id); if (!w) return;
+  S.ws = w; lastWs.set(id); await loadMembers(); await loadMeta(); updateTabs();
+  if (location.hash === '#/' || location.hash === '') route(); else location.hash = '#/';
+}
+async function loadPropCounts() {
+  const [c, t, r] = await Promise.all([
+    fetchAll(() => sb.from('components').select('id,workspace_id,type_id,created_at').order('id')),
+    fetchAll(() => sb.from('task_defs_gm').select('*').order('id')),
+    fetchAll(() => sb.from('records').select('id,component_id,task_id,performed_at').not('task_id', 'is', null).order('id'))
+  ]);
+  if (c.error || t.error || r.error) return null;
+  S.tasks = t.data; S.done = buildDone(r.data);
+  const out = {};
+  c.data.forEach(comp => {
+    const o = out[comp.workspace_id] ??= { over: 0, soon: 0, total: 0 };
+    tasksFor(comp).out.forEach(row => { const d = taskState(comp, row).days; o.total++; if (d < 0) o.over++; else if (d <= 7) o.soon++; });
+  });
+  return out;
+}
+async function renderProperties() {
+  const f = S.pf ??= { q: '', chip: 'all' };
+  app.innerHTML = `<div class="pagehead"><h2>Properties</h2></div>` + skeleton(3);
+  const fr = await sb.from('workspace_favs_gm').select('workspace_id');
+  const favOK = !fr.error; S.favs = new Set((fr.data || []).map(x => x.workspace_id));
+  let counts = null;
+  const recent = lastWs.recent();
+  app.innerHTML = `
+    <div class="pagehead"><h2>Properties</h2><span class="count" id="pcnt"></span></div>
+    <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+      <input id="pq" type="search" placeholder="Search properties…" autocomplete="off" value="${esc(f.q)}"></div>
+    <div class="chips" id="pchips" style="margin-bottom:12px"></div>
+    <div id="plist"></div>
+    <div class="row" style="margin-top:14px"><button class="sec" id="pnew">+ New property / join with code</button></div>`;
+  const draw = () => {
+    const kinds = [...new Set(S.workspaces.map(w => w.kind).filter(Boolean))];
+    const chips = [['all', 'All'], ...(S.favs.size ? [['fav', '★ Favorites']] : []), ...kinds.map(k => [k, PROP_KIND[k]])];
+    if (!chips.some(([k]) => k === f.chip)) f.chip = 'all';
+    document.getElementById('pchips').innerHTML = chips.length > 1 ? chips.map(([k, l]) => `<button type="button" class="chip" data-c="${k}" aria-pressed="${f.chip === k}">${l}</button>`).join('') : '';
+    const q = f.q.trim().toLowerCase();
+    const rows = S.workspaces.filter(w => (f.chip === 'all' || (f.chip === 'fav' ? S.favs.has(w.id) : w.kind === f.chip)) && (!q || w.name.toLowerCase().includes(q) || (PROP_KIND[w.kind] || '').toLowerCase().includes(q)))
+      .sort((a, b) => (S.favs.has(b.id) - S.favs.has(a.id)) || ((recent[b.id] || 0) - (recent[a.id] || 0)) || a.name.localeCompare(b.name));
+    document.getElementById('pcnt').textContent = rows.length + (rows.length === 1 ? ' property' : ' properties');
+    document.getElementById('plist').innerHTML = rows.map((w, i) => {
+      const c = counts?.[w.id];
+      const chip = !counts ? '' : c?.over ? `<span class="due over">${c.over} overdue</span>` : c?.soon ? `<span class="due soon">${c.soon} due this week</span>` : c?.total ? '<span class="due">On track</span>' : '';
+      return `<div class="item" data-open="${w.id}" role="button" tabindex="0" style="animation-delay:${Math.min(i, 8) * 40}ms">
+        <div class="t"><b>${esc(w.name)}</b><span class="mut">${w.kind ? `<span class="tag">${PROP_KIND[w.kind]}</span>` : ''}${S.ws && w.id === S.ws.id ? '<span class="tag line">Current</span>' : ''}</span></div>
+        ${chip}<button class="star" data-fav="${w.id}" aria-pressed="${S.favs.has(w.id)}" aria-label="Favorite">${S.favs.has(w.id) ? '★' : '☆'}</button></div>`;
+    }).join('') || '<div class="card mut" style="text-align:center">No properties match.</div>';
+  };
+  draw();
+  document.getElementById('pq').oninput = e => { f.q = e.target.value; draw(); };
+  document.getElementById('pchips').onclick = e => { const b = e.target.closest('.chip'); if (b) { f.chip = b.dataset.c; draw(); } };
+  document.getElementById('plist').onclick = async e => {
+    const st = e.target.closest('[data-fav]');
+    if (st) {
+      e.stopPropagation(); const id = st.dataset.fav, on = S.favs.has(id);
+      const { error } = on ? await sb.from('workspace_favs_gm').delete().eq('workspace_id', id)
+                           : await sb.from('workspace_favs_gm').insert({ workspace_id: id });
+      if (error) return toast(favOK ? friendlyErr(error.message) : 'Run properties.sql in Supabase to use favorites.', true);
+      on ? S.favs.delete(id) : S.favs.add(id); draw(); return;
+    }
+    const it = e.target.closest('[data-open]'); if (it) openWorkspace(it.dataset.open);
+  };
+  document.getElementById('plist').onkeydown = e => { if (e.key === 'Enter' && e.target.dataset.open) openWorkspace(e.target.dataset.open); };
+  document.getElementById('pnew').onclick = () => renderWorkspaceSetup(true);
+  counts = await loadPropCounts();
+  if (counts && location.hash === '#/properties' && document.getElementById('plist')) draw();
+}
+
 function renderWorkspaceSetup(canCancel) {
   app.innerHTML = `
     <div class="card"><h2>Create a workspace</h2>
@@ -1364,6 +1462,10 @@ function renderTeam() {
   const people = Object.entries(S.members).sort((a, b) => order[a[1].role] - order[b[1].role] || String(a[1].display_name).localeCompare(String(b[1].display_name)));
   app.innerHTML = `
     <div class="pagehead"><h2>Team</h2><span class="count">${esc(S.ws.name)}</span></div>
+    ${manage ? `<div class="card"><h2>Property</h2>
+      <label for="pname" style="margin-top:0">Name</label><input id="pname" value="${esc(S.ws.name)}" autocomplete="off">
+      <label for="pkind">Type</label><select id="pkind"><option value="">— not set —</option>${Object.entries(PROP_KIND).map(([k, v]) => `<option value="${k}" ${S.ws.kind === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <div class="err" id="perr"></div><button class="sec" id="psave">Save</button></div>` : ''}
     <div class="card">
       <h2>Invite people</h2>
       <p class="mut">Send the link. They sign in or create an account, tap Join, and start as a Member. Then set their role below.</p>
@@ -1388,6 +1490,16 @@ function renderTeam() {
       <p style="margin:0 0 8px"><b>Maintainer</b> <span class="mut">full control. Can appoint or remove owners, as long as one owner remains.</span></p>
       <p style="margin:0"><b>Member</b> <span class="mut">adds and edits components and records. Cannot delete setup items.</span></p>
     </div>`;
+  const ps = document.getElementById('psave');
+  if (ps) ps.onclick = ev => busy(ev.currentTarget, async () => {
+    const name = document.getElementById('pname').value.trim(), kind = document.getElementById('pkind').value || null;
+    if (!name) return setErr('Enter a name', 'perr');
+    const { error } = await sb.from('workspaces').update({ name, kind }).eq('id', S.ws.id);
+    if (error) return setErr(error.message, 'perr');
+    S.ws.name = name; S.ws.kind = kind;
+    const w = S.workspaces.find(x => x.id === S.ws.id); if (w) { w.name = name; w.kind = kind; }
+    updateTabs(); toast('Saved'); renderTeam();
+  });
   document.getElementById('copy').onclick = async () => {
     try { await navigator.clipboard.writeText(S.ws.join_code); toast('Join code copied'); }
     catch { document.getElementById('jcode').select(); toast('Select and copy the code'); }
