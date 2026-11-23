@@ -176,6 +176,26 @@
   .frow .top{display:flex;align-items:center;gap:8px}
   .frow .top b{flex:1;min-width:0;word-break:break-word}
   .frow .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  /* ---------- one-handed use: log sheet, log bar, big targets ---------- */
+  .sheetbg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:39;display:none}
+  .sheet{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(100%,760px);max-height:88vh;overflow:auto;background:#fff;border:1px solid var(--line);border-bottom:0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));z-index:40;display:none;box-shadow:0 -6px 0 rgba(0,0,0,.15)}
+  body.sheet-open{overflow:hidden}
+  body.sheet-open .sheetbg,body.sheet-open .sheet{display:block}
+  @keyframes sheetin{from{transform:translate(-50%,28px);opacity:0}to{transform:translate(-50%,0);opacity:1}}
+  #app>.sheet,#app>.sheetbg,#app>.logbar{animation:none}
+  body.sheet-open #app>.sheet{animation:sheetin .22s var(--ease) both}
+  .sheethead{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .logbar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(66px + env(safe-area-inset-bottom));width:min(100%,760px);padding:0 14px;z-index:25}
+  .logbar button{width:100%;min-height:58px;font-size:15px;box-shadow:4px 4px 0 rgba(0,0,0,.25)}
+  button.big{width:100%;min-height:58px;font-size:15px;margin-top:12px}
+  body.has-logbar main{padding-bottom:calc(172px + env(safe-area-inset-bottom))}
+  body.has-logbar #toasts{bottom:calc(150px + env(safe-area-inset-bottom))}
+  .stepper{display:flex;gap:8px}
+  .stepper input{text-align:center;font-size:18px;font-weight:700}
+  .stepper button{flex:0 0 64px;font-size:24px;padding:0}
+  .toast.has-act{pointer-events:auto;display:flex;align-items:center;gap:10px}
+  .toast .tact{background:transparent;border:1px solid #fff;color:#fff;min-height:40px;padding:6px 12px;font-size:12px}
+  @media (pointer:coarse){.chip{min-height:48px;padding:10px 16px}.trk .acts button{min-height:48px}.star{min-height:48px;min-width:48px}}
   .warn{border-color:var(--bad);background:#fff5f5}
   .due{display:inline-block;padding:2px 8px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--ink);background:#fff;color:var(--ink);white-space:nowrap}
   .due.over{background:var(--bad);border-color:var(--bad);color:#fff}
@@ -283,10 +303,29 @@ function friendlyErr(m) {
   if (/locations_guid_uniq/i.test(m)) return 'That IFC GlobalId is already used by another location.';
   if (/task_defs_gm|records.*task_id|column .*task_id/i.test(m)) return 'One database step is missing: run tasks.sql in Supabase, then try again.';
   if (/workspace_name_for_code|reset_join_code/i.test(m)) return 'One database step is missing: run invites.sql in Supabase, then try again.';
+  if (/quick_notes/i.test(m)) return 'One database step is missing: run quicknotes.sql in Supabase, then try again.';
   if (/rate limit/i.test(m)) return 'Too many attempts. Wait a few minutes and try again.';
   return m;
 }
 function setErr(msg, id = 'err') { const e = document.getElementById(id); if (e) e.textContent = msg ? friendlyErr(msg) : ''; }
+function toastAction(msg, acts, ms = 8000) {
+  const el = document.createElement('div'); el.className = 'toast has-act';
+  const sp = document.createElement('span'); sp.textContent = msg; sp.style.flex = '1'; el.appendChild(sp);
+  acts.forEach(a => { const b = document.createElement('button'); b.type = 'button'; b.className = 'tact'; b.textContent = a.label; b.onclick = () => { el.remove(); a.fn(); }; el.appendChild(b); });
+  document.getElementById('toasts').appendChild(el);
+  try { navigator.vibrate && navigator.vibrate(15); } catch {}
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 260); }, ms);
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') document.body.classList.remove('sheet-open'); });
+const DEFAULT_QUICK = ['All OK', 'Cleaned', 'Replaced part', 'Adjusted', 'Needs follow-up'];
+const quickNotes = typeId => { const q = typeById(typeId)?.quick_notes; return q && q.length ? q : DEFAULT_QUICK; };
+function guessType(title) {
+  const t = String(title).toLowerCase();
+  return /inspect|check|test/.test(t) ? 'Inspection' : /clean|flush|wash/.test(t) ? 'Cleaning' : /replace|change|swap/.test(t) ? 'Replacement' : /repair|fix/.test(t) ? 'Repair' : 'Service';
+}
+const newDefaults = {
+  get: () => { try { return JSON.parse(localStorage.getItem('mqr_new_' + S.ws.id) || 'null'); } catch { return null; } },
+  set: v => { try { localStorage.setItem('mqr_new_' + S.ws.id, JSON.stringify(v)); } catch {} } };
 function toast(msg, bad = false) {
   const el = document.createElement('div');
   el.className = 'toast' + (bad ? ' bad' : '');
@@ -509,6 +548,7 @@ function openFieldForm(host, typeId, existing, done) {
 // ---------- Routing ----------
 window.addEventListener('hashchange', () => { window.scrollTo(0, 0); route(); });
 async function route() {
+  document.body.classList.remove('sheet-open', 'has-logbar');
   updateTabs();
   if (!S.user) return renderAuth();
   const h = location.hash;
@@ -763,17 +803,18 @@ async function renderList() {
 
 // ---------- New / edit component ----------
 function renderNew() { renderComponentForm(null); }
-function renderComponentForm(c) {
+function renderComponentForm(c, seed) {
   const editing = !!c;
-  let typeId = c?.type_id || '';
-  let locId = c?.location_id || '';
-  const custom = { ...(c?.custom || {}) };
+  const last = !editing && !seed ? newDefaults.get() : null;     // new component: start from what you used last time
+  let typeId = c?.type_id || seed?.type_id || (last && typeById(last.type) ? last.type : '');
+  let locId = c?.location_id || seed?.location_id || (last && locById(last.loc) ? last.loc : '');
+  const custom = { ...(c?.custom || seed?.custom || {}) };
   app.innerHTML = `
-    <div class="pagehead"><h2>${editing ? 'Edit component' : 'New component'}</h2></div>
+    <div class="pagehead"><h2>${editing ? 'Edit component' : seed ? 'Add another' : 'New component'}</h2></div>
     ${migrationBanner()}
     <div class="card">
       ${editing && c.tag ? `<p class="mut" style="margin:0 0 4px">Asset tag: <b>${esc(c.tag)}</b></p>` : ''}
-      <label for="n" id="nlabel">Name *</label><input id="n" value="${esc(c?.name || '')}" placeholder="e.g. Rooftop AC Unit 2" autocomplete="off">
+      <label for="n" id="nlabel">Name *</label><input id="n" value="${esc(c?.name || (seed && !seed.type_id ? seed.name : ''))}" placeholder="e.g. Rooftop AC Unit 2" autocomplete="off">
 
       <label for="ty">Type</label>
       <div class="row"><select id="ty">${typeOptions(typeId)}</select><button type="button" class="sec sm" id="addty">+ Type</button></div>
@@ -787,7 +828,8 @@ function renderComponentForm(c) {
       <div id="qlo"></div>
 
       ${editing ? '' : `<div id="qtywrap" class="hide"><label for="qn">How many?</label>
-        <input id="qn" type="number" min="1" max="50" value="1" inputmode="numeric">
+        <div class="stepper"><button type="button" class="sec" id="qminus" aria-label="Fewer">−</button>
+          <input id="qn" type="number" min="1" max="50" value="1" inputmode="numeric"><button type="button" class="sec" id="qplus" aria-label="More">+</button></div>
         <p class="mut" id="qnhint" style="margin:6px 0 0"></p></div>`}
 
       <label for="nt">Notes</label><textarea id="nt" placeholder="Model, serial number, anything useful">${esc(c?.notes || '')}</textarea>
@@ -826,7 +868,11 @@ function renderComponentForm(c) {
     }
   };
   drawCF(); syncHints();
-  if (!editing) $('qn').oninput = syncHints;
+  if (!editing) {
+    $('qn').oninput = syncHints;
+    const bump = d => { $('qn').value = Math.max(1, Math.min(50, (parseInt($('qn').value, 10) || 1) + d)); syncHints(); };
+    $('qminus').onclick = () => bump(-1); $('qplus').onclick = () => bump(1);
+  }
   $('ty').onchange = () => { syncCustom(); typeId = $('ty').value; $('afhost').innerHTML = ''; drawCF(); syncHints(); };
   $('lo').onchange = () => { locId = $('lo').value; };
 
@@ -894,7 +940,11 @@ function renderComponentForm(c) {
     const { data, error } = await sb.from('components').insert(rows).select();
     if (error) return setErr(error.message);
     await loadMeta();
-    if (data.length === 1) { toast('Component created'); location.hash = '#/c/' + data[0].id; }
+    newDefaults.set({ type: typeId, loc: locId });
+    if (data.length === 1) {
+      location.hash = '#/c/' + data[0].id;
+      toastAction('Component created', [{ label: '+ Another', fn: () => renderComponentForm(null, data[0]) }]);
+    }
     else { S.batchRows = data; toast(`${data.length} components created`); location.hash = '#/batch'; }
   });
 }
@@ -941,6 +991,7 @@ async function renderDue() {
 }
 
 async function renderComponent(id, afterJoin = false) {
+  document.body.classList.remove('sheet-open');
   app.innerHTML = skeleton(3);
   const { data: c, error } = await sb.from('components').select('*').eq('id', id).maybeSingle();
   if (error || !c) return renderJoinPrompt(id, afterJoin ? 'That join code is for a different workspace than this component.' : '');
@@ -950,6 +1001,7 @@ async function renderComponent(id, afterJoin = false) {
     wsSelect.value = S.ws.id; lastWs.set(S.ws.id); await loadMembers(); await loadMeta();
   }
   updateTabs();
+  document.body.classList.add('has-logbar');
   const { data: recs } = await sb.from('records').select('*').eq('component_id', id).order('performed_at', { ascending: false });
   await loadTasks();
   const tk = S.taskError ? { out: [], skipped: [] } : tasksFor(c);
@@ -964,6 +1016,23 @@ async function renderComponent(id, afterJoin = false) {
       <div class="mut">${c.tag ? `<span class="tag line" style="font-weight:700">${esc(c.tag)}</span>` : ''}${tName ? `<span class="tag">${esc(tName)}</span>` : ''}${esc(lPath)}</div>
       ${defs.length ? `<div class="kvs">${defs.map(f => `<div class="kv"><span>${esc(f.label)}</span><b>${esc(fmtField(f, c.custom?.[f.id]))}</b></div>`).join('')}</div>` : ''}
       ${c.notes ? `<p>${esc(c.notes).replace(/\n/g, '<br>')}</p>` : ''}
+    </div>
+    <div class="card noprint"><h2>Schedule</h2>
+      ${S.taskError ? '<p class="mut">Recurring tasks need one database step: run <code>tasks.sql</code> in Supabase, then reload.</p>' : ''}
+      ${tk.out.map((r, i) => { const st = taskState(c, r); return `<div class="trk">
+        <div class="top"><b>${esc(r.eff.title)}</b>${dueChip(st.days)}</div>
+        <div class="mut">${everyText(r.eff.interval_days)} · ${st.last ? 'last done ' + fmt(new Date(st.last).toISOString()) : 'never logged'}${r.source === 'override' ? ' · custom for this asset' : ''}</div>
+        ${r.eff.instructions ? `<div class="ins">${esc(r.eff.instructions)}</div>` : ''}
+        <div class="acts"><button class="sm" data-done="${i}">✓ Done</button><button class="sec sm" data-log="${i}">With note</button>
+          ${r.source === 'type' ? `<button class="sec sm" data-cust="${i}">Customize</button><button class="sec sm" data-skip="${i}">Skip here</button>` : ''}
+          ${r.source === 'override' ? `<button class="sec sm" data-tedit="${i}">Edit</button><button class="sec sm" data-treset="${r.eff.id}">Use type default</button>` : ''}
+          ${r.source === 'own' ? `<button class="sec sm" data-tedit="${i}">Edit</button><button class="sec sm" data-treset="${r.eff.id}">Delete</button>` : ''}</div>
+        <div data-thost="${i}"></div></div>`; }).join('') || (S.taskError ? '' : '<div class="mut">No recurring tasks yet.</div>')}
+      ${tk.skipped.map(x => `<div class="mut" style="margin-top:8px">Skipped here: ${esc(x.base.title)} <button class="sec sm" data-treset="${x.eff.id}">Restore</button></div>`).join('')}
+      <div id="newtask"></div>
+      ${S.taskError ? '' : '<button class="sec" id="addtask" style="margin-top:12px">+ Add task for this asset</button>'}
+    </div>
+    <div class="card">
       <div class="qrframe"><div class="qr">${qrSvg(compUrl(c.id))}</div></div>
       <div class="qrcap">Scan to log maintenance</div>
       <div class="row actions noprint">
@@ -975,33 +1044,23 @@ async function renderComponent(id, afterJoin = false) {
         <button id="psticker">Print sticker</button>
         <button class="sec" onclick="window.print()">Full page</button>
         <button class="sec" id="edit">Edit</button>
+        <button class="sec" id="clone">Add another like this</button>
         ${isOwner ? '<button class="bad" id="del">Delete</button>' : ''}
       </div>
     </div>
-    <div class="card noprint"><h2>Schedule</h2>
-      ${S.taskError ? '<p class="mut">Recurring tasks need one database step: run <code>tasks.sql</code> in Supabase, then reload.</p>' : ''}
-      ${tk.out.map((r, i) => { const st = taskState(c, r); return `<div class="trk">
-        <div class="top"><b>${esc(r.eff.title)}</b>${dueChip(st.days)}</div>
-        <div class="mut">${everyText(r.eff.interval_days)} · ${st.last ? 'last done ' + fmt(new Date(st.last).toISOString()) : 'never logged'}${r.source === 'override' ? ' · custom for this asset' : ''}</div>
-        ${r.eff.instructions ? `<div class="ins">${esc(r.eff.instructions)}</div>` : ''}
-        <div class="acts"><button class="sm" data-log="${i}">Log it</button>
-          ${r.source === 'type' ? `<button class="sec sm" data-cust="${i}">Customize</button><button class="sec sm" data-skip="${i}">Skip here</button>` : ''}
-          ${r.source === 'override' ? `<button class="sec sm" data-tedit="${i}">Edit</button><button class="sec sm" data-treset="${r.eff.id}">Use type default</button>` : ''}
-          ${r.source === 'own' ? `<button class="sec sm" data-tedit="${i}">Edit</button><button class="sec sm" data-treset="${r.eff.id}">Delete</button>` : ''}</div>
-        <div data-thost="${i}"></div></div>`; }).join('') || (S.taskError ? '' : '<div class="mut">No recurring tasks yet.</div>')}
-      ${tk.skipped.map(x => `<div class="mut" style="margin-top:8px">Skipped here: ${esc(x.base.title)} <button class="sec sm" data-treset="${x.eff.id}">Restore</button></div>`).join('')}
-      <div id="newtask"></div>
-      ${S.taskError ? '' : '<button class="sec" id="addtask" style="margin-top:12px">+ Add task for this asset</button>'}
-    </div>
-    <div class="card noprint">
-      <h2>Log maintenance</h2>
+    <div class="sheetbg noprint" id="sbg"></div>
+    <div class="sheet noprint" id="sheet" role="dialog" aria-label="Log maintenance">
+      <div class="sheethead"><h2 style="margin:0" id="sheettitle">Log maintenance</h2><button class="sec sm" id="closesheet" type="button" aria-label="Close">✕</button></div>
       <div id="logfor"></div>
-      <label>Type</label>
-      <div class="chips" id="chips">${REC_TYPES.map(t => `<button type="button" class="chip" aria-pressed="${t === 'Service'}" data-t="${t}">${t}</button>`).join('')}</div>
-      <label for="rd">What was done *</label><textarea id="rd" placeholder="Describe the work, parts used, readings…"></textarea>
+      <div id="typewrap"><label>Type</label>
+        <div class="chips" id="chips">${REC_TYPES.map(t => `<button type="button" class="chip" aria-pressed="${t === 'Service'}" data-t="${t}">${t}</button>`).join('')}</div></div>
+      <label for="rd" id="rdlabel">What was done *</label>
+      <div class="chips" id="qchips" style="margin-bottom:8px">${quickNotes(c.type_id).map(q => `<button type="button" class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+      <textarea id="rd" placeholder="Describe the work, parts used, readings…"></textarea>
       <div class="err" id="err"></div>
-      <button id="addrec">Add record</button>
+      <button id="addrec" class="big">Save record</button>
     </div>
+    <div class="logbar noprint"><button id="openlog" type="button">＋ Log maintenance</button></div>
     <div class="card"><h2>History (${(recs || []).length})</h2>
       <div class="tl">
       ${(recs || []).map(r => `
@@ -1025,13 +1084,31 @@ async function renderComponent(id, afterJoin = false) {
     window.print();
   };
 
+  const setRecType = t => { recType = t; document.querySelectorAll('#chips .chip').forEach(x => x.setAttribute('aria-pressed', x.dataset.t === t)); };
   document.getElementById('chips').addEventListener('click', e => {
     const b = e.target.closest('.chip'); if (!b) return;
-    recType = b.dataset.t;
-    document.querySelectorAll('#chips .chip').forEach(x => x.setAttribute('aria-pressed', x === b));
+    setRecType(b.dataset.t);
   });
+  // "Add note" after a one-tap Done: the sheet adds a note to that record instead of making a new one
+  let noteMode = null;
+  if (S.noteFor && S.noteFor.cid === id) {
+    noteMode = S.noteFor; S.noteFor = null;
+    document.getElementById('sheettitle').textContent = 'Add a note';
+    document.getElementById('typewrap').classList.add('hide');
+    document.getElementById('rdlabel').textContent = 'Note for: ' + noteMode.title;
+    document.getElementById('rd').placeholder = 'Parts used, readings, anything to remember…';
+    document.getElementById('addrec').textContent = 'Save note';
+    document.body.classList.add('sheet-open'); setTimeout(() => document.getElementById('rd').focus(), 80);
+  }
   document.getElementById('addrec').onclick = ev => busy(ev.currentTarget, async () => {
-    const description = document.getElementById('rd').value.trim(); if (!description) return setErr('Describe what was done');
+    const typed = document.getElementById('rd').value.trim();
+    const description = typed || (!noteMode && logTask ? logTask.eff.title : '');
+    if (!description) return setErr(noteMode ? 'Write a note' : 'Describe what was done');
+    if (noteMode) {
+      const { error: ne } = await sb.from('records').update({ description: noteMode.title + ' — ' + description }).eq('id', noteMode.rid);
+      if (ne) return setErr(ne.message);
+      S.flash = true; toast('Note added'); return renderComponent(id);
+    }
     const { error } = await sb.from('records').insert({
       component_id: c.id, workspace_id: c.workspace_id, type: recType, description, ...(logTask ? { task_id: logTask.eff.id } : {}) });
     if (error) return setErr(error.message);
@@ -1046,17 +1123,36 @@ async function renderComponent(id, afterJoin = false) {
     });
   });
   document.getElementById('edit').onclick = () => renderEdit(c);
+  document.getElementById('clone').onclick = () => renderComponentForm(null, c);
   const redoC = () => renderComponent(id);
   const showLogFor = () => {
     const el = document.getElementById('logfor');
     el.innerHTML = logTask ? `<div class="panel" style="margin-top:0"><b>Completing: ${esc(logTask.eff.title)}</b> <button class="sec sm" id="unlog" type="button" style="float:right">✕</button>${logTask.eff.instructions ? `<div class="ins" style="font-size:14px;white-space:pre-wrap;margin-top:6px">${esc(logTask.eff.instructions)}</div>` : ''}</div>` : '';
     const u = document.getElementById('unlog'); if (u) u.onclick = () => { logTask = null; showLogFor(); };
   };
+  const openSheet = () => { document.body.classList.add('sheet-open'); setTimeout(() => document.getElementById('rd').focus(), 80); };
+  const closeSheet = () => { document.body.classList.remove('sheet-open'); };
+  document.getElementById('openlog').onclick = openSheet;
+  document.getElementById('closesheet').onclick = closeSheet;
+  document.getElementById('sbg').onclick = closeSheet;
+  document.getElementById('qchips').onclick = e => {
+    const b = e.target.closest('[data-q]'); if (!b) return;
+    const rd = document.getElementById('rd'), cur = rd.value.trim().replace(/[,;.]$/, '');
+    rd.value = cur ? cur + ', ' + b.dataset.q.toLowerCase() : b.dataset.q; rd.focus();
+  };
   app.querySelectorAll('[data-log]').forEach(b => b.onclick = () => {
-    logTask = tk.out[+b.dataset.log]; showLogFor();
-    const rd = document.getElementById('rd'); if (!rd.value.trim()) rd.value = logTask.eff.title;
-    rd.scrollIntoView({ behavior: 'smooth', block: 'center' }); rd.focus();
+    logTask = tk.out[+b.dataset.log]; showLogFor(); setRecType(guessType(logTask.eff.title));
+    openSheet();
   });
+  app.querySelectorAll('[data-done]').forEach(b => b.onclick = () => busy(b, async () => {
+    const r = tk.out[+b.dataset.done], title = r.eff.title;
+    const { data, error } = await sb.from('records').insert({ component_id: c.id, workspace_id: c.workspace_id, type: guessType(title), description: title, task_id: r.eff.id }).select('id').single();
+    if (error) return toast(friendlyErr(error.message), true);
+    S.flash = true; await renderComponent(id);
+    toastAction('Done: ' + title, [
+      { label: 'Undo', fn: async () => { await sb.from('records').delete().eq('id', data.id); toast('Undone'); renderComponent(id); } },
+      { label: 'Add note', fn: () => { S.noteFor = { cid: id, rid: data.id, title }; renderComponent(id); } }]);
+  }));
   app.querySelectorAll('[data-cust]').forEach(b => b.onclick = () => { const r = tk.out[+b.dataset.cust];
     openTaskForm(app.querySelector(`[data-thost="${b.dataset.cust}"]`), { component_id: c.id }, null, redoC, r.base); });
   app.querySelectorAll('[data-tedit]').forEach(b => b.onclick = () => { const r = tk.out[+b.dataset.tedit];
@@ -1340,6 +1436,11 @@ async function renderType(id) {
       <div id="newtt"></div>
       ${S.taskError ? '' : '<button id="addtt" style="margin-top:12px">+ Add task</button>'}
     </div>
+    <div class="card"><h2>Quick notes</h2>
+      <p class="mut">Tap-to-add phrases shown when logging maintenance on any ${esc(t.name)}. One per line, up to 12.</p>
+      <textarea id="qnotes" rows="5" placeholder="Replaced filter&#10;Checked pressure&#10;Cleaned coils">${esc((t.quick_notes || []).join('\n'))}</textarea>
+      <div class="err" id="qnerr"></div><button class="sec" id="qnsave">Save quick notes</button>
+      <p class="mut" style="margin:6px 0 0">Leave empty to use the standard ones (All OK, Cleaned, Replaced part…).</p></div>
     ${owner ? `<div class="card"><h2>Delete type</h2><p class="mut">Components keep their data but lose this type.</p><button class="bad" id="tdel">Delete type</button></div>` : ''}`;
   const $ = id => document.getElementById(id);
   const redo = () => renderType(id);
@@ -1358,6 +1459,12 @@ async function renderType(id) {
     await loadMeta(); toast('Prefix saved'); redo();
   });
   $('addfield').onclick = () => openFieldForm($('newfield'), id, null, redo);
+  $('qnsave').onclick = ev => busy(ev.currentTarget, async () => {
+    const quick_notes = $('qnotes').value.split('\n').map(x => x.trim().slice(0, 40)).filter(Boolean).slice(0, 12);
+    const { error } = await sb.from('component_types').update({ quick_notes }).eq('id', id);
+    if (error) return setErr(error.message, 'qnerr');
+    await loadMeta(); toast('Quick notes saved'); redo();
+  });
   const att = $('addtt'); if (att) att.onclick = () => openTaskForm($('newtt'), { type_id: id }, null, redo);
   app.querySelectorAll('[data-ttedit]').forEach(b => b.onclick = () =>
     openTaskForm(app.querySelector(`[data-tth="${b.dataset.ttedit}"]`), {}, ttasks.find(x => x.id === b.dataset.ttedit), redo));
