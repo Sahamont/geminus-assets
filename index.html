@@ -248,6 +248,7 @@ const lastWs = { get: () => { try { return localStorage.getItem('mqr_ws'); } cat
                  set: v => { try { localStorage.setItem('mqr_ws', v); } catch {} } };
 
 function appBase() { return location.origin + location.pathname; }
+function inviteUrl(code) { return appBase() + '#/join/' + encodeURIComponent(code); }
 function compUrl(id) { return appBase() + '#/c/' + id; }
 function qrSvg(text, cell = 4) {
   const q = qrcode(0, 'M'); q.addData(text); q.make();
@@ -271,6 +272,7 @@ function friendlyErr(m) {
   if (/column .*(kind|ifc_guid)|locations_kind_check|ifc_guid\(\)/i.test(m)) return 'One database step is missing: run locations.sql in Supabase, then try again.';
   if (/locations_guid_uniq/i.test(m)) return 'That IFC GlobalId is already used by another location.';
   if (/task_defs_gm|records.*task_id|column .*task_id/i.test(m)) return 'One database step is missing: run tasks.sql in Supabase, then try again.';
+  if (/workspace_name_for_code|reset_join_code/i.test(m)) return 'One database step is missing: run invites.sql in Supabase, then try again.';
   if (/rate limit/i.test(m)) return 'Too many attempts. Wait a few minutes and try again.';
   return m;
 }
@@ -486,6 +488,7 @@ async function route() {
   const h = location.hash;
   let m;
   if ((m = h.match(/^#\/c\/([0-9a-f-]{36})$/i))) return renderComponent(m[1]);
+  if ((m = h.match(/^#\/join\/([^/]+)$/))) return renderInvite(decodeURIComponent(m[1]));
   if (h === '#/profile') return renderProfile();
   if (h === '#/batch') return renderBatch();
   if (!S.workspaces.length) return renderWorkspaceSetup();
@@ -987,6 +990,35 @@ async function renderComponent(id, afterJoin = false) {
   };
 }
 
+async function renderInvite(code) {
+  app.innerHTML = skeleton(2);
+  const mine = S.workspaces.find(w => String(w.join_code).toLowerCase() === code.toLowerCase());
+  if (mine) {                                   // already a member: just open it
+    S.ws = mine; lastWs.set(mine.id); await loadWorkspaces(); toast('You are already in ' + mine.name);
+    location.hash = '#/'; return;
+  }
+  const { data: name, error } = await sb.rpc('workspace_name_for_code', { p_code: code });
+  if (error) { app.innerHTML = `<div class="card"><div class="err">${esc(friendlyErr(error.message))}</div></div>`; return; }
+  if (!name) {
+    app.innerHTML = `<div class="card"><h2>This invite isn't valid</h2>
+      <p>The link may have been replaced by a newer one. Ask the person who invited you for a fresh link.</p>
+      <div class="row"><button id="home">Continue</button></div></div>`;
+    document.getElementById('home').onclick = () => { location.hash = '#/'; };
+    return;
+  }
+  app.innerHTML = `<div class="card">
+    <h2 class="big">Join ${esc(name)}?</h2>
+    <p>You've been invited to <b>${esc(name)}</b> on Geminus Assets. You'll join as a Member and can see its components and maintenance records.</p>
+    <div class="err" id="err"></div>
+    <div class="row"><button id="jn">Join workspace</button><button class="sec" id="home">Not now</button></div></div>`;
+  document.getElementById('home').onclick = () => { location.hash = '#/'; };
+  document.getElementById('jn').onclick = ev => busy(ev.currentTarget, async () => {
+    const { data, error: e2 } = await sb.rpc('join_workspace', { p_code: code });
+    if (e2) return setErr(e2.message);
+    lastWs.set(data); await loadWorkspaces(); toast('Joined ' + name); location.hash = '#/'; route();
+  });
+}
+
 function renderJoinPrompt(id, msg) {
   app.innerHTML = `
     <div class="card">
@@ -1333,10 +1365,13 @@ function renderTeam() {
   app.innerHTML = `
     <div class="pagehead"><h2>Team</h2><span class="count">${esc(S.ws.name)}</span></div>
     <div class="card">
-      <h2>Join code</h2>
-      <p class="mut">Share this so someone can join. They start as a Member; then set their role below.</p>
+      <h2>Invite people</h2>
+      <p class="mut">Send the link. They sign in or create an account, tap Join, and start as a Member. Then set their role below.</p>
+      <div class="row" style="flex-wrap:wrap"><button id="copylink">Copy invite link</button>${navigator.share ? '<button class="sec" id="sharelink">Share…</button>' : ''}</div>
+      <label for="jcode">Or give them the code</label>
       <div class="row"><input readonly id="jcode" value="${esc(S.ws.join_code)}" onclick="this.select()" style="font-family:monospace;letter-spacing:.1em">
-        <button id="copy">Copy</button></div>
+        <button class="sec" id="copy">Copy</button></div>
+      ${manage ? '<button class="sec sm" id="resetcode" style="margin-top:12px">Reset code and links</button><p class="mut" style="margin:6px 0 0">Makes a new code. Old links and codes stop working. People already in stay in.</p>' : ''}
     </div>
     <div class="card"><h2>Members (${people.length})</h2>
       ${people.map(([uid, m]) => `
@@ -1356,6 +1391,25 @@ function renderTeam() {
   document.getElementById('copy').onclick = async () => {
     try { await navigator.clipboard.writeText(S.ws.join_code); toast('Join code copied'); }
     catch { document.getElementById('jcode').select(); toast('Select and copy the code'); }
+  };
+  const link = () => inviteUrl(S.ws.join_code);
+  document.getElementById('copylink').onclick = async () => {
+    try { await navigator.clipboard.writeText(link()); toast('Invite link copied'); }
+    catch { prompt('Copy this invite link:', link()); }
+  };
+  const sh = document.getElementById('sharelink');
+  if (sh) sh.onclick = async () => {
+    try { await navigator.share({ title: 'Join ' + S.ws.name, text: `Join ${S.ws.name} on Geminus Assets`, url: link() }); } catch {}
+  };
+  const rc = document.getElementById('resetcode');
+  if (rc) rc.onclick = () => {
+    if (!confirm('Reset the code? Every invite link and code already sent will stop working. People already in the workspace stay in.')) return;
+    busy(rc, async () => {
+      const { data, error } = await sb.rpc('reset_join_code', { p_workspace: S.ws.id });
+      if (error) return toast(friendlyErr(error.message), true);
+      S.ws.join_code = data; const w = S.workspaces.find(x => x.id === S.ws.id); if (w) w.join_code = data;
+      toast('New code created'); renderTeam();
+    });
   };
   app.querySelectorAll('[data-role]').forEach(sel => sel.onchange = async () => {
     const uid = sel.dataset.role, role = sel.value, prev = S.members[uid].role;
