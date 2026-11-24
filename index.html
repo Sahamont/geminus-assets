@@ -323,6 +323,11 @@ function guessType(title) {
   const t = String(title).toLowerCase();
   return /inspect|check|test/.test(t) ? 'Inspection' : /clean|flush|wash/.test(t) ? 'Cleaning' : /replace|change|swap/.test(t) ? 'Replacement' : /repair|fix/.test(t) ? 'Repair' : 'Service';
 }
+// Unsaved form text is kept on the phone, so a locked screen or a reloaded tab never costs you the entry.
+const drafts = {
+  get: k => { try { const d = JSON.parse(localStorage.getItem(k) || 'null'); return d && Date.now() - d.ts < 864e5 ? d : null; } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify({ ...v, ts: Date.now() })); } catch {} },
+  del: k => { try { localStorage.removeItem(k); } catch {} } };
 const newDefaults = {
   get: () => { try { return JSON.parse(localStorage.getItem('mqr_new_' + S.ws.id) || 'null'); } catch { return null; } },
   set: v => { try { localStorage.setItem('mqr_new_' + S.ws.id, JSON.stringify(v)); } catch {} } };
@@ -609,8 +614,14 @@ function renderAuth(mode = 'in') {
   });
 }
 
+let authUid = null;
 sb.auth.onAuthStateChange(async (_evt, session) => {
+  const uid = session?.user?.id ?? null;
   S.user = session?.user ?? null;
+  // Coming back to the tab fires SIGNED_IN / TOKEN_REFRESHED for the same person. Nothing changed,
+  // so do not reload and redraw (that threw away half-filled forms).
+  if (uid && uid === authUid) return;
+  authUid = uid;
   if (S.user) { await loadWorkspaces(); }
   else { S.workspaces = []; S.ws = null; }
   route();
@@ -806,15 +817,18 @@ function renderNew() { renderComponentForm(null); }
 function renderComponentForm(c, seed) {
   const editing = !!c;
   const last = !editing && !seed ? newDefaults.get() : null;     // new component: start from what you used last time
-  let typeId = c?.type_id || seed?.type_id || (last && typeById(last.type) ? last.type : '');
-  let locId = c?.location_id || seed?.location_id || (last && locById(last.loc) ? last.loc : '');
-  const custom = { ...(c?.custom || seed?.custom || {}) };
+  const dkey = 'mqr_draft_' + S.ws.id + '_' + (editing ? c.id : 'new');
+  const dr = !seed ? drafts.get(dkey) : null;                    // half-filled form from before the app was interrupted
+  let typeId = dr ? (typeById(dr.type) ? dr.type : '') : (c?.type_id || seed?.type_id || (last && typeById(last.type) ? last.type : ''));
+  let locId = dr ? (locById(dr.loc) ? dr.loc : '') : (c?.location_id || seed?.location_id || (last && locById(last.loc) ? last.loc : ''));
+  const custom = { ...(dr ? dr.custom : (c?.custom || seed?.custom || {})) };
   app.innerHTML = `
     <div class="pagehead"><h2>${editing ? 'Edit component' : seed ? 'Add another' : 'New component'}</h2></div>
     ${migrationBanner()}
+    ${dr ? '<div class="card" id="drbanner" style="display:flex;align-items:center;justify-content:space-between;gap:10px"><span>Restored your unsaved entry.</span><button class="sec sm" id="drdiscard" type="button">Discard</button></div>' : ''}
     <div class="card">
       ${editing && c.tag ? `<p class="mut" style="margin:0 0 4px">Asset tag: <b>${esc(c.tag)}</b></p>` : ''}
-      <label for="n" id="nlabel">Name *</label><input id="n" value="${esc(c?.name || (seed && !seed.type_id ? seed.name : ''))}" placeholder="e.g. Rooftop AC Unit 2" autocomplete="off">
+      <label for="n" id="nlabel">Name *</label><input id="n" value="${esc(dr ? dr.name : (c?.name || (seed && !seed.type_id ? seed.name : '')))}" placeholder="e.g. Rooftop AC Unit 2" autocomplete="off">
 
       <label for="ty">Type</label>
       <div class="row"><select id="ty">${typeOptions(typeId)}</select><button type="button" class="sec sm" id="addty">+ Type</button></div>
@@ -832,7 +846,7 @@ function renderComponentForm(c, seed) {
           <input id="qn" type="number" min="1" max="50" value="1" inputmode="numeric"><button type="button" class="sec" id="qplus" aria-label="More">+</button></div>
         <p class="mut" id="qnhint" style="margin:6px 0 0"></p></div>`}
 
-      <label for="nt">Notes</label><textarea id="nt" placeholder="Model, serial number, anything useful">${esc(c?.notes || '')}</textarea>
+      <label for="nt">Notes</label><textarea id="nt" placeholder="Model, serial number, anything useful">${esc(dr ? dr.notes : (c?.notes || ''))}</textarea>
       <div class="err" id="err"></div>
       <div class="row"><button id="save">${editing ? 'Save' : 'Save component'}</button>${editing ? '<button class="sec" id="cx">Cancel</button>' : ''}</div>
     </div>`;
@@ -868,6 +882,11 @@ function renderComponentForm(c, seed) {
     }
   };
   drawCF(); syncHints();
+  if (dr && !editing && dr.qty) $('qn').value = dr.qty;
+  if (dr) { syncHints(); $('drdiscard').onclick = () => { drafts.del(dkey); editing ? renderComponentForm(c) : renderComponentForm(null); }; }
+  let dt = 0;
+  const keep = () => { clearTimeout(dt); dt = setTimeout(() => { if (!document.getElementById('cf')) return; syncCustom(); drafts.set(dkey, { name: $('n').value, notes: $('nt').value, type: typeId, loc: locId, custom, qty: $('qn') ? $('qn').value : '1' }); }, 250); };
+  if (!seed) { const card = app.querySelector('.card:not(#drbanner)'); card.addEventListener('input', keep); card.addEventListener('change', keep); card.addEventListener('click', e => { if (e.target.closest('#qminus,#qplus')) keep(); }); }
   if (!editing) {
     $('qn').oninput = syncHints;
     const bump = d => { $('qn').value = Math.max(1, Math.min(50, (parseInt($('qn').value, 10) || 1) + d)); syncHints(); };
@@ -904,9 +923,10 @@ function renderComponentForm(c, seed) {
     });
   };
 
-  if (editing) $('cx').onclick = () => renderComponent(c.id);
+  if (editing) $('cx').onclick = () => { drafts.del(dkey); renderComponent(c.id); };
   else $('n').focus({ preventScroll: true });
   $('save').onclick = ev => busy(ev.currentTarget, async () => {
+    clearTimeout(dt);
     const name = $('n').value.trim();
     const typeName = typeId ? (typeById(typeId)?.name || '') : '';
     if (!name && (editing || !typeName)) return setErr('Name is required');
@@ -915,14 +935,18 @@ function renderComponentForm(c, seed) {
     const base = { type_id: typeId || null, location_id: locId || null, custom, notes: $('nt').value.trim() || null };
     if (editing) {
       const row = { ...base, name };
-      if (!c.tag && typeId) {            // older components get a tag the first time they are saved with a type
+      const typeChanged = typeId && typeId !== c.type_id;
+      if (typeId && (!c.tag || typeChanged)) {   // first tag, or a new type means a new tag from that type's numbering
+        if (c.tag && typeChanged && !confirm(`Changing the type gives this asset a new tag (now ${c.tag}). The QR code keeps working; a printed sticker will still show the old tag until you reprint it. Continue?`)) return;
         const { data: tg, error: te } = await sb.rpc('allocate_tags', { p_type_id: typeId, p_count: 1 });
         if (te) return setErr(te.message);
         row.tag = tg[0];
+        const oldNum = c.tag ? c.tag.split('-').pop() : '', newNum = tg[0].split('-').pop();
+        if (oldNum && row.name.endsWith(' ' + oldNum)) row.name = row.name.slice(0, -oldNum.length) + newNum;   // keep "Name 013" in step with its tag
       }
       const { error } = await sb.from('components').update(row).eq('id', c.id);
       if (error) return setErr(error.message);
-      await loadMeta(); toast('Saved'); renderComponent(c.id);
+      drafts.del(dkey); await loadMeta(); toast('Saved'); renderComponent(c.id);
       return;
     }
     const qty = typeId ? Math.max(1, Math.min(50, parseInt($('qn').value, 10) || 1)) : 1;
@@ -934,13 +958,13 @@ function renderComponentForm(c, seed) {
     }
     const rows = Array.from({ length: qty }, (_, i) => {
       const tag = tags[i] || null, num = tag ? tag.split('-').pop() : '';
-      const nm = name ? (qty > 1 ? `${name} ${num}` : name) : `${typeName} ${num}`;
+      const nm = name ? ((qty > 1 || (tag && !/\d$/.test(name))) ? `${name} ${num}` : name) : `${typeName} ${num}`;
       return { ...base, name: nm, tag, workspace_id: S.ws.id };
     });
     const { data, error } = await sb.from('components').insert(rows).select();
     if (error) return setErr(error.message);
     await loadMeta();
-    newDefaults.set({ type: typeId, loc: locId });
+    drafts.del(dkey); newDefaults.set({ type: typeId, loc: locId });
     if (data.length === 1) {
       location.hash = '#/c/' + data[0].id;
       toastAction('Component created', [{ label: '+ Another', fn: () => renderComponentForm(null, data[0]) }]);
@@ -1056,11 +1080,11 @@ async function renderComponent(id, afterJoin = false) {
         <div class="chips" id="chips">${REC_TYPES.map(t => `<button type="button" class="chip" aria-pressed="${t === 'Service'}" data-t="${t}">${t}</button>`).join('')}</div></div>
       <label for="rd" id="rdlabel">What was done *</label>
       <div class="chips" id="qchips" style="margin-bottom:8px">${quickNotes(c.type_id).map(q => `<button type="button" class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
-      <textarea id="rd" placeholder="Describe the work, parts used, readings…"></textarea>
+      <textarea id="rd" placeholder="Describe the work, parts used, readings…">${esc(drafts.get('mqr_draftlog_' + id)?.text || '')}</textarea>
       <div class="err" id="err"></div>
       <button id="addrec" class="big">Save record</button>
     </div>
-    <div class="logbar noprint"><button id="openlog" type="button">＋ Log maintenance</button></div>
+    <div class="logbar noprint"><button id="openlog" type="button">＋ Log maintenance${drafts.get('mqr_draftlog_' + id) ? ' · unsaved text' : ''}</button></div>
     <div class="card"><h2>History (${(recs || []).length})</h2>
       <div class="tl">
       ${(recs || []).map(r => `
@@ -1107,12 +1131,12 @@ async function renderComponent(id, afterJoin = false) {
     if (noteMode) {
       const { error: ne } = await sb.from('records').update({ description: noteMode.title + ' — ' + description }).eq('id', noteMode.rid);
       if (ne) return setErr(ne.message);
-      S.flash = true; toast('Note added'); return renderComponent(id);
+      drafts.del('mqr_draftlog_' + id); S.flash = true; toast('Note added'); return renderComponent(id);
     }
     const { error } = await sb.from('records').insert({
       component_id: c.id, workspace_id: c.workspace_id, type: recType, description, ...(logTask ? { task_id: logTask.eff.id } : {}) });
     if (error) return setErr(error.message);
-    S.flash = true; toast('Record added'); renderComponent(id);
+    drafts.del('mqr_draftlog_' + id); S.flash = true; toast('Record added'); renderComponent(id);
   });
   app.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
     if (!confirm('Delete this record?')) return;
@@ -1133,6 +1157,7 @@ async function renderComponent(id, afterJoin = false) {
   const openSheet = () => { document.body.classList.add('sheet-open'); setTimeout(() => document.getElementById('rd').focus(), 80); };
   const closeSheet = () => { document.body.classList.remove('sheet-open'); };
   document.getElementById('openlog').onclick = openSheet;
+  document.getElementById('rd').addEventListener('input', e => { const v = e.target.value; v.trim() ? drafts.set('mqr_draftlog_' + id, { text: v }) : drafts.del('mqr_draftlog_' + id); });
   document.getElementById('closesheet').onclick = closeSheet;
   document.getElementById('sbg').onclick = closeSheet;
   document.getElementById('qchips').onclick = e => {
@@ -1294,7 +1319,7 @@ function renderSetup() {
     await loadMeta(); toast('Type added — now add its fields'); location.hash = '#/type/' + data.id;
   });
   const bl = $('blist'); if (bl) bl.onclick = () => { S.bulk = 'list'; renderSetup(); $('bn')?.focus(); };
-  const bf = $('bfloors'); if (bf) bf.onclick = () => { S.bulk = 'floors'; renderSetup(); };
+  const bf = $('bfloors'); if (bf) bf.onclick = () => { S.bulk = 'floors'; S.bulkOver = {}; renderSetup(); };
   if (S.bulk) wireBulk();
   const lad = $('ladd'); if (lad) lad.onclick = () => { S.locEdit = { id: null, parent_id: '' }; S.bulk = null; renderSetup(); };
   app.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { S.bulk = null; S.locEdit = { id: null, parent_id: b.dataset.sub }; renderSetup(); $('ln')?.focus(); });
@@ -1331,15 +1356,21 @@ function renderSetup() {
 }
 
 function floorLabel(n) { return n === 0 ? 'Ground floor' : n < 0 ? 'Basement ' + (-n) : 'Floor ' + n; }
+function floorNums(f) {
+  const skip = new Set(f.skip), out = [];
+  for (let n = f.first, i = 0; out.length < f.floors && i < 400; n++, i++) if (!skip.has(n)) out.push(n);
+  return out;
+}
 function floorPlan(f) {
   const floors = [], rooms = [];
-  for (let i = 0; i < f.floors; i++) {
-    const n = f.first + i; floors.push(floorLabel(n));
-    for (let r = 1; r <= f.rooms; r++) {
+  floorNums(f).forEach((n, i) => {
+    floors.push(floorLabel(n));
+    const count = f.over && f.over[n] !== undefined ? f.over[n] : f.rooms;
+    for (let r = 1; r <= count; r++) {
       const num = f.style === 'floor' ? (Math.abs(n) * 100 + r) : r;
       rooms.push({ floor: i, name: (f.prefix ? f.prefix.trim() + ' ' : '') + (n < 0 && f.style === 'floor' ? 'B' : '') + num });
     }
-  }
+  });
   return { floors, rooms };
 }
 function bulkPanel() {
@@ -1355,7 +1386,11 @@ function bulkPanel() {
     <label for="bp">Inside (usually a building)</label><select id="bp">${locOptions('', '— top level —')}</select>
     <div class="row"><div style="flex:1"><label for="bf">Floors</label><input id="bf" type="number" min="1" max="60" value="3" inputmode="numeric"></div>
       <div style="flex:1"><label for="b0">First floor number</label><input id="b0" type="number" min="-5" max="100" value="1" inputmode="numeric"></div>
-      <div style="flex:1"><label for="br">Rooms per floor</label><input id="br" type="number" min="0" max="100" value="10" inputmode="numeric"></div></div>
+      <div style="flex:1"><label for="br">Usual rooms per floor</label><input id="br" type="number" min="0" max="99" value="10" inputmode="numeric"></div></div>
+    <label for="bsk">Skip floor numbers (optional)</label><input id="bsk" placeholder="e.g. 13" inputmode="numeric" autocomplete="off">
+    <label>Rooms on each floor</label>
+    <p class="mut" style="margin:0 0 6px">Change any floor that has a different number of rooms.</p>
+    <div id="bfl"></div>
     <div class="row"><div style="flex:1"><label for="bx">Room name starts with</label><input id="bx" value="Room" autocomplete="off"></div>
       <div style="flex:1"><label for="bs">Numbering</label><select id="bs"><option value="floor">101, 102… (floor × 100 + n)</option><option value="seq">1, 2, 3… on every floor</option></select></div></div>
     <p class="mut" id="bprev" style="margin:8px 0 0"></p>
@@ -1364,11 +1399,24 @@ function bulkPanel() {
 function wireBulk() {
   const $ = id => document.getElementById(id);
   $('bcancel').onclick = () => { S.bulk = null; renderSetup(); };
-  const flat = () => ({ floors: Math.max(0, parseInt($('bf')?.value) || 0), first: parseInt($('b0')?.value) || 0,
-    rooms: Math.max(0, parseInt($('br')?.value) || 0), prefix: $('bx')?.value || '', style: $('bs')?.value });
+  const flat = () => ({ floors: Math.max(0, Math.min(60, parseInt($('bf')?.value) || 0)), first: parseInt($('b0')?.value) || 0,
+    rooms: Math.max(0, Math.min(99, parseInt($('br')?.value) || 0)), prefix: $('bx')?.value || '', style: $('bs')?.value,
+    skip: ($('bsk')?.value || '').split(/[ ,;]+/).map(x => parseInt(x)).filter(x => !isNaN(x)), over: S.bulkOver || {} });
   if (S.bulk === 'floors') {
     const prev = () => { const p = floorPlan(flat()); $('bprev').textContent = `Will create ${p.floors.length} floors and ${p.rooms.length} rooms` + (p.rooms[0] ? ` (first room: ${p.rooms[0].name}).` : '.'); };
-    ['bf', 'b0', 'br', 'bx', 'bs'].forEach(i => $(i).oninput = prev); prev();
+    const rows = () => {
+      const f = flat();
+      $('bfl').innerHTML = floorNums(f).map(n => `<div class="row" style="align-items:center;margin-bottom:6px"><div style="flex:1">${floorLabel(n)}</div>
+        <input type="number" min="0" max="99" inputmode="numeric" data-fl="${n}" aria-label="Rooms on ${floorLabel(n)}" value="${f.over[n] !== undefined ? f.over[n] : f.rooms}" style="flex:0 0 96px;text-align:center"></div>`).join('');
+      $('bfl').querySelectorAll('[data-fl]').forEach(i => i.oninput = () => {
+        const v = Math.max(0, Math.min(99, parseInt(i.value) || 0));
+        (S.bulkOver ||= {})[i.dataset.fl] = v; prev();
+      });
+      prev();
+    };
+    ['bf', 'b0', 'br', 'bsk'].forEach(i => $(i).oninput = rows);
+    ['bx', 'bs'].forEach(i => $(i).oninput = prev);
+    rows();
   }
   $('bgo').onclick = ev => busy(ev.currentTarget, async () => {
     const parent_id = $('bp').value || null, ws = S.ws.id;
@@ -1391,7 +1439,7 @@ function wireBulk() {
       const rr = await sb.from('locations').insert(plan.rooms.map(r => ({ workspace_id: ws, parent_id: idByName[plan.floors[r.floor]], name: r.name, kind: 'space' })));
       if (rr.error) { await loadMeta(); return setErr('Floors were created, but rooms failed: ' + rr.error.message, 'berr'); }
     }
-    S.bulk = null; await loadMeta(); toast(`${plan.floors.length} floors, ${plan.rooms.length} rooms created`); renderSetup();
+    S.bulk = null; S.bulkOver = {}; await loadMeta(); toast(`${plan.floors.length} floors, ${plan.rooms.length} rooms created`); renderSetup();
   });
 }
 
@@ -1399,6 +1447,7 @@ async function renderType(id) {
   const t = typeById(id);
   if (!t) { app.innerHTML = `<div class="card">Type not found.<div class="row" style="margin-top:10px"><button onclick="location.hash='#/setup'">Back to setup</button></div></div>`; return; }
   await loadTasks();
+  const tcomps = (await fetchAll(() => sb.from('components').select('id,name,tag').eq('type_id', id).order('id'))).data || [];
   const ttasks = S.tasks.filter(x => x.type_id === id);
   const defs = S.fields.filter(f => f.type_id === id);
   const owner = canManage();
@@ -1436,6 +1485,9 @@ async function renderType(id) {
       <div id="newtt"></div>
       ${S.taskError ? '' : '<button id="addtt" style="margin-top:12px">+ Add task</button>'}
     </div>
+    ${(() => { const un = tcomps.filter(x => x.tag && !/\d$/.test(x.name)); return un.length ? `<div class="card"><h2>Names without numbers (${un.length})</h2>
+      <p class="mut">Adds each asset's tag number to its name, for example "Wifi Switch Dimmable" becomes "Wifi Switch Dimmable 012".</p>
+      <button class="sec" id="numnames">Add numbers to ${un.length} name${un.length === 1 ? '' : 's'}</button></div>` : ''; })()}
     <div class="card"><h2>Quick notes</h2>
       <p class="mut">Tap-to-add phrases shown when logging maintenance on any ${esc(t.name)}. One per line, up to 12.</p>
       <textarea id="qnotes" rows="5" placeholder="Replaced filter&#10;Checked pressure&#10;Cleaned coils">${esc((t.quick_notes || []).join('\n'))}</textarea>
@@ -1459,6 +1511,14 @@ async function renderType(id) {
     await loadMeta(); toast('Prefix saved'); redo();
   });
   $('addfield').onclick = () => openFieldForm($('newfield'), id, null, redo);
+  const nn = $('numnames');
+  if (nn) nn.onclick = ev => busy(ev.currentTarget, async () => {
+    const un = tcomps.filter(x => x.tag && !/\d$/.test(x.name));
+    if (!confirm(`Add the tag number to ${un.length} name${un.length === 1 ? '' : 's'}?`)) return;
+    const res = await Promise.all(un.map(x => sb.from('components').update({ name: x.name + ' ' + x.tag.split('-').pop() }).eq('id', x.id)));
+    const bad = res.find(r => r.error); if (bad) return toast(friendlyErr(bad.error.message), true);
+    await loadMeta(); toast('Names updated'); redo();
+  });
   $('qnsave').onclick = ev => busy(ev.currentTarget, async () => {
     const quick_notes = $('qnotes').value.split('\n').map(x => x.trim().slice(0, 40)).filter(Boolean).slice(0, 12);
     const { error } = await sb.from('component_types').update({ quick_notes }).eq('id', id);
