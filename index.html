@@ -350,8 +350,10 @@ function onEnter(inputId, btnId) {
   const i = document.getElementById(inputId);
   if (i) i.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById(btnId).click(); });
 }
+// Your own name: the one saved on your account first, then the team list, then the email.
+const myDisplayName = () => (S.user?.user_metadata?.display_name || '').trim() || S.members[S.user?.id]?.display_name || (S.user?.email || '').split('@')[0];
 function updateTabs() {
-  const myName = S.members[S.user?.id]?.display_name || (S.user?.email || '').split('@')[0];
+  const myName = myDisplayName();
   profileBtn.textContent = (myName || '?').trim().charAt(0).toUpperCase() || '?';
   const show = !!(S.user && S.ws);
   tabs.classList.toggle('hide', !show);
@@ -622,11 +624,19 @@ sb.auth.onAuthStateChange(async (_evt, session) => {
   // so do not reload and redraw (that threw away half-filled forms).
   if (uid && uid === authUid) return;
   authUid = uid;
-  if (S.user) { await loadWorkspaces(); }
+  if (S.user) { await loadWorkspaces(); await syncMyName(); }
   else { S.workspaces = []; S.ws = null; }
   route();
 });
 
+
+// If the name on your account and the name in the team list ever disagree, the account name wins.
+async function syncMyName() {
+  const want = (S.user?.user_metadata?.display_name || '').trim(), have = S.members[S.user?.id]?.display_name;
+  if (!want || !S.ws || have === undefined || have === want) return;
+  const { error } = await sb.rpc('set_display_name', { p_name: want });
+  if (!error) { await loadMembers(); updateTabs(); }
+}
 
 // ---------- Workspaces ----------
 async function loadWorkspaces() {
@@ -680,11 +690,12 @@ async function renderProperties() {
   const recent = lastWs.recent();
   app.innerHTML = `
     <div class="pagehead"><h2>Properties</h2><span class="count" id="pcnt"></span></div>
-    <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
-      <input id="pq" type="search" placeholder="Search properties…" autocomplete="off" value="${esc(f.q)}"></div>
+    <div class="row" style="align-items:stretch;gap:8px;margin-bottom:12px">
+      <div class="search" style="flex:1;margin:0"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+        <input id="pq" type="search" placeholder="Search properties…" autocomplete="off" value="${esc(f.q)}"></div>
+      <button id="pnew" type="button" style="flex:0 0 auto;white-space:nowrap" aria-label="New property or join with code">＋ New</button></div>
     <div class="chips" id="pchips" style="margin-bottom:12px"></div>
-    <div id="plist"></div>
-    <div class="row" style="margin-top:14px"><button class="sec" id="pnew">+ New property / join with code</button></div>`;
+    <div id="plist"></div>`;
   const draw = () => {
     const kinds = [...new Set(S.workspaces.map(w => w.kind).filter(Boolean))];
     const chips = [['all', 'All'], ...(S.favs.size ? [['fav', '★ Favorites']] : []), ...kinds.map(k => [k, PROP_KIND[k]])];
@@ -725,8 +736,9 @@ async function renderProperties() {
 function renderWorkspaceSetup(canCancel) {
   app.innerHTML = `
     <div class="card"><h2>Create a workspace</h2>
-      <p class="mut">A workspace is one team (e.g. your employer). Everyone in it shares components and records.</p>
-      <label for="wname">Workspace name</label><input id="wname" placeholder="e.g. Hotel Maintenance">
+      <p class="mut">A workspace is one property or team, like a hotel or a house. Everyone in it shares components and records.</p>
+      <label for="wname">Workspace name</label><input id="wname" placeholder="e.g. Casa Garza">
+      <label for="wkind">Type</label><select id="wkind"><option value="">— not set —</option>${Object.entries(PROP_KIND).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
       <div class="err" id="err"></div>
       <button id="mk">Create</button></div>
     <div class="card"><h2>Or join one</h2>
@@ -740,6 +752,8 @@ function renderWorkspaceSetup(canCancel) {
     const name = document.getElementById('wname').value.trim(); if (!name) return setErr('Enter a name');
     const { data, error } = await sb.rpc('create_workspace', { p_name: name });
     if (error) return setErr(error.message);
+    const kind = document.getElementById('wkind').value;
+    if (kind) { const k = await sb.from('workspaces').update({ kind }).eq('id', data); if (k.error) toast(friendlyErr(k.error.message), true); }
     toast('Workspace created'); await finish(data);
   });
   document.getElementById('jn').onclick = ev => busy(ev.currentTarget, async () => {
@@ -1569,7 +1583,7 @@ async function renderType(id) {
 // ---------- Profile ----------
 function renderProfile() {
   const email = S.user.email || '';
-  const current = S.members[S.user.id]?.display_name || email.split('@')[0];
+  const current = myDisplayName();
   app.innerHTML = `
     <div class="pagehead"><h2>Profile</h2></div>
     <div class="card">
@@ -1604,9 +1618,13 @@ function renderProfile() {
     setErr('');
     const { error } = await sb.rpc('set_display_name', { p_name: name });
     if (error) return setErr(error.message);
-    await sb.auth.updateUser({ data: { display_name: name } });   // used for workspaces you join later
+    const u = await sb.auth.updateUser({ data: { display_name: name } });   // kept on your account, used when you join workspaces
+    if (u.data?.user) S.user = u.data.user;
     if (S.ws) await loadMembers();
-    updateTabs(); toast('Profile saved');
+    updateTabs();
+    const saved = S.members[S.user.id]?.display_name;
+    if (S.ws && saved !== name) return setErr(`The team list still shows "${saved || 'nothing'}". Run profile.sql again in Supabase, then save once more.`);
+    toast('Profile saved');
   });
   $('ppw').onclick = ev => busy(ev.currentTarget, async () => {
     const a = $('np').value, b = $('np2').value;
